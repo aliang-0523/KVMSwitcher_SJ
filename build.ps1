@@ -3,7 +3,7 @@ param([switch]$Installer)
 $ErrorActionPreference = 'Stop'
 Set-Location $PSScriptRoot
 New-Item -ItemType Directory -Force dist | Out-Null
-$version = '1.3.13'
+$version = '1.3.14'
 
 go build -tags nodynamic -trimpath -ldflags "-H=windowsgui -s -w" -o dist\kvmswitch.exe ./cmd/kvmswitch-win
 if ($LASTEXITCODE -ne 0) { throw "Windows 端编译失败" }

@@ -220,6 +220,7 @@ go run github.com/akavel/rsrc@v0.10.2 -arch amd64 -ico packaging/KVMSwitch.ico -
 
 完整的发布说明见 [Releases](https://github.com/aliang-0523/KVMSwitcher_SJ/releases)。
 
+- **1.3.14**：安全修复：Mac 端切换命令（`mac_ddc_command`）改为只在本机生效，不再从对端同步；执行时不再经过 shell，第一个词须为程序绝对路径，并增加 5 秒超时。原来使用管道、引号等 shell 写法的，请改为脚本并填写脚本的绝对路径。
 - **1.3.13**：修复部分 Windows 键盘的音量旋钮切到 Mac 后无效的问题，支持驱动合成的音量键；Mac 优先直接调节当前声音输出设备。请两端一起更新。
 - **1.3.12**：修复从 Windows 切到 Mac 后，单按 Q、H 等字母可能误触系统快捷键的问题。
 - **1.3.11**：新增独立的双向文件传输；剪贴板改为切换时立即开始同步。

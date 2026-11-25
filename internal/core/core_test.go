@@ -2,6 +2,7 @@ package core
 
 import (
 	"bytes"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"image"
@@ -9,6 +10,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -727,12 +729,42 @@ func TestSharedRoundTrip(t *testing.T) {
 	a.ModCtrl, a.ModWin, a.WindowsInput, a.MacInput, a.SwitchMonitor = "command", "control", "hdmi2", "dp2", false
 	a.EmergencyHotkey, a.ModAlt = "Ctrl+F10", "option"
 	b := DefaultConfig()
-	b.PairingKey, b.PeerHost, b.Port = "KEEP", "1.2.3.4", 5
+	b.PairingKey, b.PeerHost, b.Port, b.MacDDCCommand = "KEEP", "1.2.3.4", 5, "/local/cmd"
 	got := b.WithShared(a.Shared())
 	want := *a
-	want.PairingKey, want.PeerHost, want.Port = "KEEP", "1.2.3.4", 5
+	want.PairingKey, want.PeerHost, want.Port, want.MacDDCCommand = "KEEP", "1.2.3.4", 5, "/local/cmd"
 	if *got != want {
 		t.Fatalf("\n得到 %+v\n期望 %+v", *got, want)
+	}
+}
+
+// 对端（包括旧版本）发来的 mac_ddc_command 必须被丢弃，不能改写本机要执行的命令。
+func TestPeerCannotSetDDCCommand(t *testing.T) {
+	a := DefaultConfig()
+	a.MacDDCCommand = "/bin/evil"
+	if b, _ := json.Marshal(a.Shared()); strings.Contains(string(b), "mac_ddc_command") {
+		t.Fatalf("共享设置不应包含 mac_ddc_command: %s", b)
+	}
+	var s Shared
+	if err := json.Unmarshal([]byte(`{"hotkey":"Ctrl+F9","mac_ddc_command":"/bin/sh -c id","rev":99}`), &s); err != nil {
+		t.Fatal(err)
+	}
+	local := DefaultConfig()
+	local.MacDDCCommand = "/opt/homebrew/bin/m1ddc set input {input}"
+	if got := local.WithShared(s); got.MacDDCCommand != local.MacDDCCommand {
+		t.Fatalf("本机命令被对端改写为 %q", got.MacDDCCommand)
+	}
+}
+
+func TestParseDDCCommand(t *testing.T) {
+	got, err := ParseDDCCommand("/opt/homebrew/bin/m1ddc  set input {input}", 15)
+	if err != nil || strings.Join(got, "|") != "/opt/homebrew/bin/m1ddc|set|input|15" {
+		t.Fatalf("got %q err %v", got, err)
+	}
+	for _, bad := range []string{"", "   ", "m1ddc set input {input}", "~/bin/x", "/a/../b", "/bin/x; rm -rf ~", "/bin/x $(id)", "/bin/x `id`", "/bin/x | y", "/bin/x 'a b'", "/bin/x > /tmp/y", "/bin/x &", "/bin/x\n/bin/y"} {
+		if _, err := ParseDDCCommand(bad, 1); err == nil {
+			t.Errorf("应拒绝 %q", bad)
+		}
 	}
 }
 

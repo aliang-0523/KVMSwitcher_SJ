@@ -1,11 +1,12 @@
 package main
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"kvmswitch/internal/core"
+	"os"
 	"os/exec"
-	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -201,7 +202,16 @@ func ddcSetInput(v uint16, externalCmd, id string) error {
 		}); err != nil {
 			return err
 		}
-		out, err := exec.Command("/bin/sh", "-c", strings.ReplaceAll(externalCmd, "{input}", strconv.Itoa(int(v)))).CombinedOutput()
+		args, err := core.ParseDDCCommand(externalCmd, int(v))
+		if err != nil {
+			return err
+		}
+		if st, e := os.Stat(args[0]); e != nil || !st.Mode().IsRegular() || st.Mode()&0111 == 0 {
+			return fmt.Errorf("切换命令指向的程序不存在或不可执行：%s", args[0])
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		out, err := exec.CommandContext(ctx, args[0], args[1:]...).CombinedOutput()
 		if err != nil {
 			return fmt.Errorf("切换失败：%w %s", err, out)
 		}

@@ -218,6 +218,10 @@ func (c *Core) ApplyConfig(next *Config) error {
 		next.PairingKey, next.Port, next.PeerHost = old.PairingKey, old.Port, old.PeerHost
 		next.Rev = max(nowMs(), old.Rev+1)
 		p, err := Validate(next)
+		// 只在命令被修改时检查格式，避免旧配置导致其他设置无法保存。
+		if err == nil && next.MacDDCCommand != old.MacDDCCommand && strings.TrimSpace(next.MacDDCCommand) != "" {
+			_, err = ParseDDCCommand(next.MacDDCCommand, 0)
+		}
 		if err == nil {
 			err = SaveConfig(c.opt.ConfigPath, next)
 		}

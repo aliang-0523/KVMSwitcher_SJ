@@ -14,7 +14,7 @@ import (
 	"time"
 )
 
-const Version = "1.3.13"
+const Version = "1.3.14"
 
 // Config 是一台设备上的全部配置。除 PairingKey、Port、PeerHost 外，其余为“共享设置”，
 // 在任意一端修改后会自动同步到另一端。
@@ -82,14 +82,34 @@ type Shared struct {
 	ScrollInvert    bool    `json:"scroll_invert"`
 	SyncClipboard   bool    `json:"sync_clipboard"`
 	MaxAutoFileMB   int64   `json:"max_auto_file_mb"`
-	MacDDCCommand   string  `json:"mac_ddc_command"`
-	Rev             int64   `json:"rev"`
+	// 注意：mac_ddc_command 会在本机被执行，故意不放进共享设置。
+	// 旧版本对端仍可能发送该字段，JSON 解码时会被直接丢弃。
+	Rev int64 `json:"rev"`
 }
 
 func (c *Config) Shared() Shared {
 	return Shared{c.Hotkey, c.EmergencyHotkey, c.SwitchMonitor, c.WindowsInput, c.MacInput,
 		c.ModCtrl, c.ModAlt, c.ModWin, c.MouseScale, c.ScrollScale, c.ScrollInvert,
-		c.SyncClipboard, c.MaxAutoFileMB, c.MacDDCCommand, c.Rev}
+		c.SyncClipboard, c.MaxAutoFileMB, c.Rev}
+}
+
+// ParseDDCCommand 把 Mac 端切换命令拆成可直接执行的参数列表（不经过 shell）。
+// 第一个词必须是程序的绝对路径；{input} 会替换为输入口编号。
+func ParseDDCCommand(s string, input int) ([]string, error) {
+	if strings.ContainsAny(s, "'\"`$;|&<>()\\*?~\n\r") {
+		return nil, fmt.Errorf("切换命令不再经过 shell 执行，不支持引号、管道、变量等写法；需要时请写成脚本并填写脚本的绝对路径")
+	}
+	f := strings.Fields(s)
+	if len(f) == 0 {
+		return nil, fmt.Errorf("切换命令为空")
+	}
+	if !filepath.IsAbs(f[0]) || filepath.Clean(f[0]) != f[0] {
+		return nil, fmt.Errorf("切换命令的第一个词必须是程序的绝对路径，例如 /opt/homebrew/bin/m1ddc")
+	}
+	for i := range f {
+		f[i] = strings.ReplaceAll(f[i], "{input}", strconv.Itoa(input))
+	}
+	return f, nil
 }
 
 // WithShared 返回一份套用了共享设置的新配置。
@@ -99,7 +119,7 @@ func (c *Config) WithShared(s Shared) *Config {
 	n.WindowsInput, n.MacInput = s.WindowsInput, s.MacInput
 	n.ModCtrl, n.ModAlt, n.ModWin = s.ModCtrl, s.ModAlt, s.ModWin
 	n.MouseScale, n.ScrollScale, n.ScrollInvert = s.MouseScale, s.ScrollScale, s.ScrollInvert
-	n.SyncClipboard, n.MaxAutoFileMB, n.MacDDCCommand, n.Rev = s.SyncClipboard, s.MaxAutoFileMB, s.MacDDCCommand, s.Rev
+	n.SyncClipboard, n.MaxAutoFileMB, n.Rev = s.SyncClipboard, s.MaxAutoFileMB, s.Rev
 	return &n
 }
 

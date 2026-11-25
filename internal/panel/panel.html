@@ -83,9 +83,9 @@
         <div class="row"><div class="lbl"><b>显示器信息</b><span>查看本机能否向显示器发送切换指令</span></div><div class="ctl"><button class="btn" id="infoBtn">读取</button></div></div>
         <pre id="infoOut" hidden></pre>
       </div>
-      <div class="card">
+      <div class="card" id="macCmdCard" hidden>
         <h2>高级</h2>
-        <div class="row"><div class="lbl"><b>Mac 端切换命令</b><span>仅当 Mac 无法让显示器换口时填写，<code>{input}</code> 会替换为输入口编号</span></div></div>
+        <div class="row"><div class="lbl"><b>Mac 端切换命令</b><span>仅当 Mac 无法让显示器换口时填写，只在本机生效、不会同步。第一个词须为程序绝对路径，不支持 shell 语法，<code>{input}</code> 会替换为输入口编号</span></div></div>
         <div class="row" style="border-top:0;padding-top:0"><input type="text" data-k="mac_ddc_command" placeholder="例如 /opt/homebrew/bin/m1ddc set input {input}" style="width:100%"></div>
       </div>
     </section>
@@ -370,6 +370,7 @@ function render(s) {
   $('#installUpdate').textContent = u.New ? '更新到 '+u.Latest : '重装当前版本';
   $('[data-tab="system"] .nav-name').textContent = u.New ? '系统与日志 · 有更新' : '系统与日志';
   state = s;
+  $('#macCmdCard').hidden = s.self_os !== 'mac';
   drawTransfers(s);
   const t=s.transfer,m=s.media||{};
   $('#testMedia').disabled=!!m.Listening;
