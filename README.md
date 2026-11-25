@@ -1,7 +1,7 @@
 # KVMSwitch
 
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
-[![Release](https://img.shields.io/github/v/release/kejimip/kvmswitch)](https://github.com/kejimip/kvmswitch/releases/latest)
+[![Release](https://img.shields.io/github/v/release/aliang-0523/KVMSwitcher_SJ)](https://github.com/aliang-0523/KVMSwitcher_SJ/releases/latest)
 ![Platforms](https://img.shields.io/badge/platform-Windows%20x64%20%7C%20macOS%20Apple%20silicon-lightgrey)
 ![Go](https://img.shields.io/badge/Go-1.26-00ADD8)
 
@@ -11,7 +11,7 @@
 
 > English summary: [jump to the bottom](#english).
 
-**下载最新稳定版：** [Windows x64 安装包（MSI）](https://github.com/kejimip/kvmswitch/releases/latest/download/KVMSwitch-Setup.msi) · [Mac 版（Apple 芯片，ZIP）](https://github.com/kejimip/kvmswitch/releases/latest/download/KVMSwitch-mac.zip) · [全部版本](https://github.com/kejimip/kvmswitch/releases)
+**下载最新稳定版：** [Windows x64 安装包（MSI）](https://github.com/aliang-0523/KVMSwitcher_SJ/releases/latest/download/KVMSwitch-Setup.msi) · [Mac 版（Apple 芯片，ZIP）](https://github.com/aliang-0523/KVMSwitcher_SJ/releases/latest/download/KVMSwitch-mac.zip) · [全部版本](https://github.com/aliang-0523/KVMSwitcher_SJ/releases)
 
 ## 特性
 
@@ -171,7 +171,7 @@ Mac 端运行后在菜单栏显示 `KVM ○`（未连接）、`KVM ●`（键鼠
 - 程序只在局域网内工作：TCP 47812 用于通信，UDP 47813 用于局域网自动发现。不连接任何第三方服务器，唯一的外网请求是向 GitHub 检查更新。
 - 操作面板只监听本机回环地址，并要求每次启动随机生成的访问令牌。
 - 持有配对密钥就能控制另一台设备的键鼠，请像保管密码一样保管它，不要发给别人。
-- 如果你发现了安全问题，请不要公开提交 Issue，可以通过 GitHub 的 [Private vulnerability reporting](https://github.com/kejimip/kvmswitch/security/advisories/new) 私下报告。
+- 如果你发现了安全问题，请不要公开提交 Issue，可以通过 GitHub 的 [Private vulnerability reporting](https://github.com/aliang-0523/KVMSwitcher_SJ/security/advisories/new) 私下报告。
 
 ## 从源码构建
 
@@ -218,7 +218,7 @@ go run github.com/akavel/rsrc@v0.10.2 -arch amd64 -ico packaging/KVMSwitch.ico -
 
 ## 版本记录
 
-完整的发布说明见 [Releases](https://github.com/kejimip/kvmswitch/releases)。
+完整的发布说明见 [Releases](https://github.com/aliang-0523/KVMSwitcher_SJ/releases)。
 
 - **1.3.13**：修复部分 Windows 键盘的音量旋钮切到 Mac 后无效的问题，支持驱动合成的音量键；Mac 优先直接调节当前声音输出设备。请两端一起更新。
 - **1.3.12**：修复从 Windows 切到 Mac 后，单按 Q、H 等字母可能误触系统快捷键的问题。
@@ -255,5 +255,5 @@ go run github.com/akavel/rsrc@v0.10.2 -arch amd64 -ico packaging/KVMSwitch.ico -
 - Both machines are equal peers. Plug the keyboard and mouse into either one. Both run the same control panel, and settings sync automatically.
 - All traffic stays on your LAN and is encrypted with AES-256-GCM, using a key derived from a shared pairing key.
 - Requirements: Windows 10/11 x64, an Apple-silicon Mac, and a monitor with DDC/CI enabled.
-- Download it from [Releases](https://github.com/kejimip/kvmswitch/releases/latest). Build it from source on Windows with `.\build.ps1`, which needs Go 1.26+ and rcodesign.
+- Download it from [Releases](https://github.com/aliang-0523/KVMSwitcher_SJ/releases/latest). Build it from source on Windows with `.\build.ps1`, which needs Go 1.26+ and rcodesign.
 - The UI is currently Chinese only. Issues and pull requests in English are welcome.

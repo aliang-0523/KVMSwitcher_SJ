@@ -21,7 +21,7 @@ import (
 	"time"
 )
 
-const repo = "kejimip/kvmswitch"
+const repo = "aliang-0523/KVMSwitcher_SJ"
 const apiURL = "https://api.github.com/repos/" + repo + "/releases/latest"
 const maxPackage = 128 << 20
 
