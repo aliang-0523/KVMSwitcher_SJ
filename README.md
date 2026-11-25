@@ -1,169 +1,259 @@
 # KVMSwitch
 
-**下载最新稳定版：** [Windows x64 安装包（MSI）](https://github.com/kejimip/kvmswitch/releases/latest/download/KVMSwitch-Setup.msi) · [Mac 版（Apple 芯片，ZIP）](https://github.com/kejimip/kvmswitch/releases/latest/download/KVMSwitch-mac.zip) · [版本记录](https://github.com/kejimip/kvmswitch/releases)
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+[![Release](https://img.shields.io/github/v/release/kejimip/kvmswitch)](https://github.com/kejimip/kvmswitch/releases/latest)
+![Platforms](https://img.shields.io/badge/platform-Windows%20x64%20%7C%20macOS%20Apple%20silicon-lightgrey)
+![Go](https://img.shields.io/badge/Go-1.26-00ADD8)
 
-让一台 Windows 电脑和一台 Mac 共用一台显示器、一套键鼠：按一下热键（默认 `Ctrl+F12`），显示器、键盘、鼠标一起切到另一台设备，剪贴板（文本、图片、文件）跟着走。
+**一个纯软件的 KVM：让一台 Windows 电脑和一台 Mac 共用一台显示器、一套键盘鼠标。**
 
-两台设备**地位相同，没有主从**：
+按一下热键（默认 `Ctrl+F12`），显示器输入口、键盘、鼠标一起切到另一台设备，剪贴板里的文本、图片、文件也跟着过去。不需要 KVM 切换器，也不需要额外的硬件。
 
-- 键盘鼠标插在哪台设备上都可以，哪台有键鼠，哪台就负责把输入转给另一台。
-- 两台设备上是同一个操作面板，在任意一台上切换、改设置都行，设置会自动同步到另一台。
+> English summary: [jump to the bottom](#english).
 
-| 文件 | 用途 |
+**下载最新稳定版：** [Windows x64 安装包（MSI）](https://github.com/kejimip/kvmswitch/releases/latest/download/KVMSwitch-Setup.msi) · [Mac 版（Apple 芯片，ZIP）](https://github.com/kejimip/kvmswitch/releases/latest/download/KVMSwitch-mac.zip) · [全部版本](https://github.com/kejimip/kvmswitch/releases)
+
+## 特性
+
+- **一键切换**：显示器通过 DDC/CI 指令换输入口，键鼠输入同时转到另一台设备。热键可自定义，另有紧急热键随时拿回控制。
+- **对等设计，没有主从**：键鼠插在哪台都可以，两台上是同一个操作面板，在任意一台改设置都会自动同步到另一台。
+- **剪贴板共享**：文本、图片、文件（含文件夹）。切换时在后台同步，就绪后正常粘贴即可；图片文件可以同时作为文件和图片粘贴。
+- **手动发文件**：在面板里拖入文件直接发到另一台，逐文件校验 SHA-256，有进度、取消和重试。
+- **键位映射**：PC 键盘的 `Ctrl` / `Alt` / `Win` 与 Mac 的 Control / Option / Command 对应关系可选，用 PC 键盘在 Mac 上也能按 `Ctrl+C` 复制。
+- **媒体键**：音量加减、静音、播放/暂停、上一首/下一首双向转发。
+- **加密通信**：仅在局域网内工作，所有流量用配对密钥派生的 AES-256-GCM 加密，不经过任何服务器。
+- **应用内更新**：从 GitHub Releases 检查新版，校验 SHA-256 后安装。
+
+## 工作原理
+
+```
+          ┌──────────── 同一台显示器 ────────────┐
+          │  HDMI                          DP   │
+   ┌──────┴──────┐   局域网（TCP，加密）  ┌──────┴──────┐
+   │   Windows   │ ◀──────────────────▶ │     Mac     │
+   │  KVMSwitch  │  键鼠 / 剪贴板 / 文件 │  KVMSwitch  │
+   └──────┬──────┘                      └─────────────┘
+          │
+      键盘 + 鼠标（插在哪台都行）
+```
+
+1. 插着键鼠的那台设备在系统层截获本机键鼠输入（Windows 用低级键盘/鼠标钩子，Mac 用 CGEventTap）。
+2. 切到另一台时，输入不再交给本机，而是通过局域网发给另一台，由那台用系统接口注入（`SendInput` / `CGEventPost`）。
+3. 两台同时尝试用 DDC/CI 让显示器换到目标输入口，任意一台成功即可；都失败则撤销这次切换。
+4. 切换时，发出方把剪贴板内容的摘要告诉接收方，接收方在后台拉取并写入本机剪贴板。
+
+两端程序都用 Go 编写。Mac 端通过 [purego](https://github.com/ebitengine/purego) 直接调用系统框架，不需要 cgo，因此两端都可以在 Windows 上编译。
+
+## 系统要求
+
+| 项目 | 要求 |
 |---|---|
-| `dist\kvmswitch.exe` | Windows 便携版 |
-| `dist\KVMSwitch-Setup.msi` | Windows x64 当前用户安装包，含开始菜单快捷方式 |
-| `dist\KVMSwitch-mac.zip` | Mac 端（Apple 芯片），解压后是 `KVMSwitch.app` |
+| Windows | Windows 11 x64（Windows 10 需另装 WebView2 Runtime） |
+| Mac | Apple 芯片（arm64）。Intel Mac 暂不支持 |
+| 显示器 | 支持 DDC/CI 并已在显示器菜单中开启；有两个以上输入口 |
+| 网络 | 两台在同一局域网，推荐有线；放行 TCP 47812 和 UDP 47813 |
 
-## 一、接线
+## 快速开始
+
+### 1. 接线
 
 | 设备 | 接到显示器的哪个口 |
 |---|---|
 | Windows | HDMI |
 | Mac mini | 显示器的 **DP 口**，Mac 这边用 **USB-C/雷雳口**（USB-C 转 DP 线） |
 
-Mac 建议走 USB-C/雷雳口而不是自带的 HDMI 口：部分 Mac 的 HDMI 口不能发送切换显示器的指令。
-两台设备接入同一个局域网，最好都用网线。显示器菜单里如果有 “DDC/CI” 选项，请确认是开启的。
+Mac 建议走 USB-C/雷雳口而不是自带的 HDMI 口：部分 Mac 的 HDMI 口不能发送切换显示器的指令。显示器菜单里如果有“DDC/CI”选项，请确认是开启的。
 
-## 二、安装
+### 2. 安装
 
-**Windows**：可运行 MSI 安装，也可直接双击 `kvmswitch.exe`，会打开操作面板。首次运行时防火墙会询问是否允许联网，选**允许（专用网络）**。
+**Windows**：运行 MSI 安装（按当前用户安装，不需要管理员权限），也可以直接双击便携版 `kvmswitch.exe`。首次运行时防火墙会询问是否允许联网，选**允许（专用网络）**。
 
 **Mac**：
 
-1. 把 `KVMSwitch-mac.zip` 拷到 Mac 上，双击解压，把 `KVMSwitch.app` 拖进“应用程序”文件夹。
-2. 双击打开。如果提示“已损坏”，先在终端检查完整性：
+1. 解压 `KVMSwitch-mac.zip`，把 `KVMSwitch.app` 拖进“应用程序”文件夹。
+2. 双击打开。发布包使用临时签名（ad hoc），**没有 Apple Developer ID 签名和公证**，系统可能提示无法验证开发者；确认来源可信后，在“系统设置 › 隐私与安全”中选择“仍要打开”。如果提示“已损坏”，先检查签名完整性：
 
    ```bash
    codesign --verify --deep --strict --verbose=2 /Applications/KVMSwitch.app
    ```
 
-   如果报告资源缺失或签名无效，请更换为已修复的包；拖到“应用程序”、改用 DMG 或清除下载标记都不能修复签名。若校验通过但提示无法验证开发者，这是另一项检查：本地构建使用临时签名（ad hoc），不包含 Developer ID 和 Apple 公证。只在确认来源可信时使用 macOS 为单个应用提供的“仍要打开”选项。
-
+   报告资源缺失或签名无效时，请从 Releases 重新下载。
 3. 按提示授权：在 **系统设置 › 隐私与安全 › 设备控制和数据访问** 里开启 KVMSwitch（部分旧版 macOS 此项名为“辅助功能”）；弹出“查找本地网络上的设备”时选**允许**。
-4. 建议在 Mac 上开启自动登录（登录界面无法被另一台设备的键鼠控制）。
+4. 建议开启自动登录：登录界面无法被另一台设备的键鼠控制。
 
 Mac 端运行后在菜单栏显示 `KVM ○`（未连接）、`KVM ●`（键鼠在本机）、`KVM ◐`（键鼠在另一台设备），点它可以打开面板。
 
-## 三、连接两台设备
+### 3. 配对
 
-只需要做一次：
+只需要做一次，方向随意：
 
-1. 在任意一台的面板里打开**连接**页，点“本机密钥”旁的**复制**（或点“显示”后照着输入）。
+1. 在任意一台的面板里打开**连接**页，点“本机密钥”旁的**复制**。
 2. 在另一台的**连接**页，把它填进“另一台设备的密钥”，点**保存并连接**。
 
-几秒后两边的状态都会变成“已连接”。方向随意，哪台填哪台的都可以。
+几秒后两边都会显示“已连接”。局域网自动发现不通时，在 Mac 面板“连接”页手动填写 Windows 的 IP。
 
-然后在多屏机器上先到「显示器 → 本机共享屏」刷新并选择目标（两端分别设置；换接口可能需要重新绑定）。再在**显示器 › 输入口识别向导**逐个试切，根据实际画面选 Windows、Mac 或无信号。两台设备都识别出来后，确认才会保存。若没有自动切回，请用显示器实体键恢复；手动选口和原来的测试仍可用。
+### 4. 设置显示器
 
-## 四、使用
+1. 如果机器接了多台显示器，先到 **显示器 › 本机共享屏** 选择共用的那一台（两台各自设置）。
+2. 打开 **显示器 › 输入口识别向导**，程序会逐个试切输入口，你根据显示器画面选择 Windows、Mac 或无信号。两台都识别出来后才会保存。
+3. 如果试切后画面没有自动切回，用显示器上的实体按键恢复。也可以手动选择输入口。
+
+## 使用
 
 | 操作 | 默认按键 |
 |---|---|
 | 在两台设备间切换 | `Ctrl+F12` |
 | 紧急拿回 | `Ctrl+Alt+Shift+F12`：在哪台设备的键盘上按，键鼠和显示器就回到哪台 |
 
-- 也可以点面板概览页中间的切换按钮，或托盘 / 菜单栏菜单里的“切换”。
-- **修饰键**：默认 PC 键盘的 `Ctrl`↔Control、`Alt`↔Option、`Win`↔Command，所以用 PC 键盘在 Mac 上复制粘贴是 `Win+C` / `Win+V`。想让 `Ctrl+C` 两边通用，在“键盘与鼠标 → 跨设备操作键位”选择 **Windows 操作键位**；选择 **Mac 操作键位** 可恢复默认对应关系。这个对应关系双向生效：键盘插在 Mac 上时，Mac 键盘的 Command 到了 Windows 就是对应的那个键。
-- **剪贴板**：切换设备时立即在后台同步新复制的文本、图片或文件，不必先按粘贴。就绪后可用系统快捷键或右键菜单直接粘贴；若在接收中先按快捷键，传完且焦点未变、没有其他输入时会补上这一次粘贴。只切换不会自动向应用粘贴内容。
-- **文件**：切换时开始展开文件夹并传到接收端缓存；进度在接收端的“剪贴板”页显示。超过上限（默认 1 GB）会在接收的那台弹窗确认。
-- **图片跨端粘贴**：单个 PNG/APNG、JPEG/JFIF、GIF、BMP、TIFF、WebP、HEIC/HEIF、AVIF、静态 SVG/SVGZ 以及内嵌 PNG 的 ICO/CUR 文件，可同时作为原文件和图片粘贴。SVG 预览为位图，部分复杂 SVG（外链、文字、滤镜等）仅传原文件；预览不保证保留动画、多页、色彩配置或矢量编辑能力。多选、损坏、不支持或过大的文件仍按普通文件传输。预览限 64 MiB、约 2500 万像素；SVG 解压后限 2 MiB。复制图片内容而非文件时，需要源应用提供受支持的剪贴板格式，不能还原原文件名。
-- **文件剪切**：跨机发送一律当复制，源文件不自动移动或删除。在接收端“剪贴板”页可取消、查看失败原因或在源剪贴板未变化时重新传输。重试只准备剪贴板，不会往当前焦点自动粘贴。
+- 也可以点面板概览页的切换按钮，或托盘 / 菜单栏菜单里的“切换”。
+- **修饰键**：默认 PC 键盘的 `Ctrl`↔Control、`Alt`↔Option、`Win`↔Command，所以用 PC 键盘在 Mac 上复制粘贴是 `Win+C` / `Win+V`。想让 `Ctrl+C` 两边通用，在 **键盘与鼠标 › 跨设备操作键位** 选择 **Windows 操作键位**。这个对应关系双向生效。
+- **剪贴板**：切换时在后台同步新复制的内容，就绪后用快捷键或右键菜单粘贴。如果在接收过程中就按了粘贴，传完时只要焦点没变、期间没有其他输入，会自动补上这次粘贴。
+- **文件**：剪贴板里的文件会在切换时传到接收端缓存，进度显示在接收端的“剪贴板”页。超过上限（默认 1 GB）会弹窗确认。跨机**剪切一律按复制处理**，源文件不会被移动或删除。
+- **图片**：单个 PNG、JPEG、GIF、BMP、TIFF、WebP、HEIC/HEIF、AVIF、静态 SVG 等图片文件，可以同时作为原文件和图片粘贴。预览上限 64 MiB、约 2500 万像素。
+- **手动发送文件**：在 **概览** 页拖入或多选文件，点“发送到…”。接收方无需确认，文件存到本机设置的接收目录（默认 `~/Downloads/KVMSwitch`），同名文件自动编号，不会覆盖。暂不支持直接发送文件夹，请先压缩。
 
-### 手动发送文件（独立于剪贴板）
-
-在**概览 → 设备切换下方**拖入或多选普通文件，点击「发送到…」才开始。无需切换设备或接收方确认，两台均需使用支持此功能的版本。ZIP、图片、SVG、Markdown 和无扩展名文件均按原样发送（跨平台文件名须兼容）。首版不展开文件夹，请先压缩。
-
-左栏「文件传输」可单独更改**本机**接收目录（默认 `~/Downloads/KVMSwitch`）、单批上限（默认 10 GiB）和暂停接收。两端显示进度、速率、完成数量和取消按钮。接收端逐文件验证 SHA-256，成功保存后才确认送达；同名文件自动编号，不覆盖。中断时保留已保存文件，清理未完成文件。最近失败的发送可以重发尚未确认的文件（从文件头开始）。如果最后一个确认包丢失，重试可能生成同名副本。
-
-点击发送后，面板先将选择的文件流式暂存到本机磁盘（需要相应可用空间）；提交完毕即可关闭面板或继续切换键鼠。每个方向同时一批，最近 30 条记录保留在本次运行中；不在重连后自动重发。
-
-## 五、操作面板
+### 操作面板
 
 两台设备上的面板完全相同。
 
 | 页面 | 内容 |
 |---|---|
-| 概览 | 键鼠现在在哪台设备、一键切换、连接/权限/显示器/剪贴板四项状态 |
-| 显示器 | 是否随切换换口、两台设备的输入口、切换测试、显示器信息 |
-| 键盘与鼠标 | 录制热键（点一下后直接按组合键）、修饰键对应、控制另一台设备时的指针和滚轮速度 |
-| 文件传输 | 本机接收目录、单批上限、暂停接收和最近任务 |
-| 剪贴板 | 同步开关、大文件确认阈值、打开收到的文件 |
-| 连接 | 本机密钥、填入另一台设备的密钥、连接状态 |
-| 系统与日志 | 开机自启、最近日志、退出程序 |
+| 概览 | 键鼠在哪台、一键切换、连接/权限/显示器/剪贴板状态、手动发送文件 |
+| 显示器 | 是否随切换换口、本机共享屏、输入口识别向导、测试切换、显示器信息 |
+| 键盘与鼠标 | 录制热键、修饰键对应、指针和滚轮速度、媒体键测试 |
+| 文件传输 | 本机接收目录、单批上限、暂停接收、最近任务 |
+| 剪贴板 | 同步开关、大文件确认阈值、传输进度与重试 |
+| 连接 | 本机密钥、另一台设备的密钥、连接状态 |
+| 系统与日志 | 开机自启、软件更新、最近日志、退出程序 |
 
-- 设置改完立即生效、自动保存，并同步到另一台设备。只有“开机自动启动”和配对密钥是每台设备各自的。
-- 打开面板：Windows 单击托盘图标或再次双击程序；Mac 点菜单栏的 `KVM` 或再次双击应用。关闭面板窗口不会退出程序。
-- 面板是一个只在本机可访问的页面。Windows 用 WebView2 Runtime 在原生窗口内显示（无需启动 Edge 浏览器；运行时缓存放在应用数据目录的 WebView2 子目录），Mac 用应用自带的窗口显示。
+- 设置改完立即生效并同步到另一台。配对密钥、开机自启、共享屏绑定、文件接收目录等属于单台设备的设置不同步。
+- 打开面板：Windows 单击托盘图标；Mac 点菜单栏的 `KVM`。再次启动程序也会打开面板。关闭面板窗口不会退出程序。
 
-### 更新与重装
+### 更新
 
-从 1.3.3 起，启动后及每 12 小时会检查 GitHub 的最新稳定版；检查失败不影响局域网切换。「系统与日志 → 软件更新」可手动检查、安装新版或重装相同版本，不会自动降级。下载前请把键鼠切回本机，等待文件传输结束。安装包在本机校验大小与发布资产的 SHA-256 后才启动安装，配对和个人设置不删除。
+启动后以及每 12 小时会检查 GitHub 上的最新稳定版，检查失败不影响使用。也可以在 **系统与日志 › 软件更新** 手动检查或重装。安装包会先校验大小和 SHA-256，配对和设置不受影响。
 
-Windows 使用 MSI 安装向导，交互安装或重装成功后会自动打开安装版，取消或失败不会启动；便携版使用此功能会安装 MSI 版，不会替换原来的便携 EXE。Mac 需要应用所在目录可写，更新后会尝试重新打开；若系统要求，重新确认键鼠和本地网络权限。旧版首次升级请用页面顶部下载链接。
+- Windows：通过 MSI 安装向导更新。便携版使用此功能会安装 MSI 版，不会替换原来的 EXE。
+- Mac：需要应用所在目录可写；替换后会重新校验签名，失败则还原旧版。更新后系统可能要求重新确认键鼠和本地网络权限。
 
-## 六、常见问题
+## 常见问题
 
-**切过去之后屏幕回不来**：按紧急热键；还不行就用显示器上的按键手动切回，然后在“显示器”页用“测试切换”和“显示器信息”排查。Mac 无法让显示器换口时，可安装 m1ddc 或 BetterDisplay，在“显示器 › 高级”里填写切换命令，例如 `/opt/homebrew/bin/m1ddc set input {input}`。
+**切过去之后屏幕回不来**：按紧急热键；还不行就用显示器上的按键手动切回，然后在“显示器”页用“测试切换”和“显示器信息”排查。Mac 无法让显示器换口时，可以安装 [m1ddc](https://github.com/waydabber/m1ddc) 或 BetterDisplay，在 **显示器 › 高级** 里填写切换命令，例如 `/opt/homebrew/bin/m1ddc set input {input}`。
 
-**一直显示未连接**：确认两台设备都在运行、密钥相同、在同一网段，Windows 防火墙已放行。自动发现不通时，在 Mac 面板“连接”页填写 Windows 的 IP。
+**一直显示未连接**：确认两台都在运行、密钥一致、在同一网段，Windows 防火墙已放行。自动发现不通时，在 Mac 面板“连接”页填写 Windows 的 IP。
 
-**切到 Mac 后键鼠没反应 / Mac 上热键无效**：先检查 **系统设置 › 隐私与安全 › 设备控制和数据访问** 中的 KVMSwitch 开关。若开关已开但仍提示未授权，先从菜单栏退出并从“应用程序”重开。修复版启动日志会显示当前程序路径、PostEvent（接收远端键鼠）与 AX 状态，请核对授权的是正在运行的副本。若更换应用后仍未生效，请退出 KVMSwitch，从该列表移除旧条目，重新添加 `/Applications/KVMSwitch.app` 并开启，再启动应用。
+**切到 Mac 后键鼠没反应 / Mac 上热键无效**：检查 **系统设置 › 隐私与安全 › 设备控制和数据访问** 中的 KVMSwitch 开关。开关已开但仍提示未授权时，从菜单栏退出后重新打开。如果换过应用文件，请退出 KVMSwitch，从列表里移除旧条目，重新添加 `/Applications/KVMSwitch.app` 并开启。启动日志会显示正在运行的程序路径和授权状态，可以用来核对。
 
-**Mac 上面板窗口打不开**：在“终端”执行下面的命令，改用浏览器显示面板，并把 `~/Library/Logs/KVMSwitch.log` 发给开发者。
+**Mac 上面板窗口打不开**：在“终端”里执行下面的命令，改用浏览器显示面板：
 
 ```bash
 /Applications/KVMSwitch.app/Contents/MacOS/kvmswitch-mac --browser
 ```
 
-**在 Windows 的管理员窗口或 UAC 弹窗里热键无效**：系统限制，切到普通窗口再按。
+**音量旋钮切到 Mac 后不起作用**：在 Windows 面板 **键盘与鼠标 › 测试媒体键** 点“监听 60 秒”，切到 Mac 后转动旋钮，再切回查看结果。显示“对端已收到”但音量不变时，可能是当前输出设备（例如部分 HDMI/DP 显示器）不支持软件调音。
 
-日志：两端都在面板的“系统与日志”页；文件位置为 Windows `%LOCALAPPDATA%\KVMSwitch\kvmswitch.log`，Mac `~/Library/Logs/KVMSwitch.log`。
+**在 Windows 的管理员窗口或 UAC 弹窗里热键无效**：这是系统限制，切到普通窗口再按。
 
-## 七、已知限制
+**日志位置**：两端都可以在面板“系统与日志”页查看。文件位于 Windows `%LOCALAPPDATA%\KVMSwitch\kvmswitch.log`，Mac `~/Library/Logs/KVMSwitch.log`。
 
-- 两台设备都要开着并已登录才能互相切换；没有键鼠的那台设备在另一台关机时无法操作，建议留一套备用键鼠。
-- 被控制时鼠标只在主显示器范围内移动；支持标准系统媒体键：音量加减、静音、播放/暂停、上一首和下一首。音量旋钮必须输出系统音量事件；只调耳机硬件或映射为厂商私有命令的旋钮不在此范围。亮度键不转发。
-- **Windows 键盘的音量旋钮**：支持物理或驱动合成的标准音量加减、静音键。排查时，在 Windows 面板“键盘与鼠标 → 测试媒体键”点“监听 60 秒”，切到 Mac 后转动，再切回查看。若始终未检测到，检查键盘驱动的旋钮映射；若显示“对端已收到”但音量不变，在 Mac“系统设置 → 声音 → 输出”试一下音量滑块。部分 HDMI / DP 显示器只支持硬件调音，可先改用内建扬声器验证。
-- 通信使用配对密钥派生的 AES-256-GCM 加密，仅限局域网使用。
+## 已知限制
 
-## 八、从旧版本升级
+- 目前只支持一台 Windows + 一台 Mac（Apple 芯片）的组合。
+- 两台设备都要开机并已登录。没有插键鼠的那台在另一台关机时无法操作，建议留一套备用键鼠。
+- 控制另一台时，鼠标只在其主显示器范围内移动。
+- 亮度键不转发；只调耳机硬件或映射为厂商私有命令的旋钮无法转发。
+- Mac 版没有经过 Apple 公证，首次打开需要手动确认。
+- 不同大版本之间协议可能不兼容，升级时请两端一起更新（1.3.1 起的协议与更早版本不兼容）。
 
-- **Windows**：先退出旧版（托盘图标右键 › 退出），再运行新的 `kvmswitch.exe`。原有设置会保留，并在连接后同步给 Mac。
-- **Mac**：1.2 起改为应用形式。如果装过 1.0/1.1 的命令行版，先在“终端”执行旧程序的 `./kvmswitch-mac uninstall`，再安装 `KVMSwitch.app` 并重新授予键鼠控制权限。
-- 1.3.1 与 1.3.0 及更早版本协议不兼容；请同时升级 Windows 和 Mac，否则无法配对连接。
+## 安全说明
 
-## 九、从源码编译
+- 两台设备之间的所有通信都使用配对密钥派生（HKDF-SHA256）的 AES-256-GCM 加密。没有密钥的设备无法连接，也无法读取流量。
+- 程序只在局域网内工作：TCP 47812 用于通信，UDP 47813 用于局域网自动发现。不连接任何第三方服务器，唯一的外网请求是向 GitHub 检查更新。
+- 操作面板只监听本机回环地址，并要求每次启动随机生成的访问令牌。
+- 持有配对密钥就能控制另一台设备的键鼠，请像保管密码一样保管它，不要发给别人。
+- 如果你发现了安全问题，请不要公开提交 Issue，可以通过 GitHub 的 [Private vulnerability reporting](https://github.com/kejimip/kvmswitch/security/advisories/new) 私下报告。
 
-在 Windows 上安装 Go 和 [rcodesign](https://github.com/indygreg/apple-platform-rs/releases/tag/apple-codesign/0.29.0)（已测试 0.29.0；将可执行文件加入 PATH，或用环境变量 `RCODESIGN` 指定完整路径），执行 `.\build.ps1` 即可同时得到两端程序。生成 MSI 另需 WiX 3.x：将工具目录设为 `WIX_BIN`，执行 `.\build.ps1 -Installer`。Windows 可在系统“已安装的应用”卸载，用户配置保留。若更换应用图标，从项目根目录运行 `go run github.com/akavel/rsrc@v0.10.2 -arch amd64 -ico packaging/KVMSwitch.ico -o cmd/kvmswitch-win/icon_windows_amd64.syso` 后重新编译。运行测试：`go test ./...`
+## 从源码构建
+
+需要在 **Windows** 上构建，两端程序都由同一台机器交叉编译：
+
+- [Go](https://go.dev/dl/) 1.26 或更高
+- [rcodesign](https://github.com/indygreg/apple-platform-rs/releases/tag/apple-codesign/0.29.0)（用于给 Mac 应用签名，已测试 0.29.0；加入 PATH，或用环境变量 `RCODESIGN` 指定路径）
+- 生成 MSI 另需 [WiX Toolset 3.x](https://github.com/wixtoolset/wix3/releases)，并把其目录设为环境变量 `WIX_BIN`
+
+```powershell
+.\build.ps1             # 生成 dist\kvmswitch.exe 和 dist\KVMSwitch-mac.zip
+.\build.ps1 -Installer  # 另外生成 dist\KVMSwitch-Setup.msi
+go test ./...           # 运行测试
+```
+
+更换应用图标后，先重新生成 Windows 资源文件再编译：
+
+```powershell
+go run github.com/akavel/rsrc@v0.10.2 -arch amd64 -ico packaging/KVMSwitch.ico -o cmd/kvmswitch-win/icon_windows_amd64.syso
+```
+
+### 代码结构
 
 | 目录 | 内容 |
 |---|---|
-| `internal/core` | 两端共用的核心：设置、热键、切换状态机、连接、剪贴板同步 |
-| `internal/panel` | 两端共用的操作面板（界面与接口） |
-| `internal/proto`、`internal/xfer` | 加密通信协议、文件传输 |
-| `cmd/kvmswitch-win`、`cmd/kvmswitch-mac` | 各自系统的能力：键鼠采集与注入、显示器、剪贴板、窗口 |
+| `internal/core` | 两端共用的核心：设置与同步、热键、切换状态机、连接、剪贴板同步 |
+| `internal/proto` | 加密帧协议 |
+| `internal/xfer` | 剪贴板内容（文本、图片、文件）传输 |
+| `internal/filedrop` | 手动发送文件 |
+| `internal/clipimage` | 图片格式识别与预览生成 |
+| `internal/panel` | 两端共用的操作面板（HTML/CSS/JS 与本地 HTTP 接口） |
+| `internal/update` | 检查与安装更新 |
+| `cmd/kvmswitch-win` | Windows：键鼠钩子与注入、DDC/CI、剪贴板、托盘、WebView2 窗口 |
+| `cmd/kvmswitch-mac` | Mac：CGEventTap 与注入、IOAVService DDC、剪贴板、菜单栏、WKWebView 窗口 |
+| `packaging`、`tools/pack` | Windows MSI 与 Mac 应用打包 |
 
-## 许可证
+## 参与贡献
 
-[MIT](LICENSE)
+欢迎提交 Issue 和 Pull Request。
+
+- 报告问题时，请附上两端的版本号、系统版本、显示器型号和连接方式，以及相关日志片段（日志里不包含配对密钥，但请再检查一遍）。
+- 提交代码前请运行 `go test ./...`，并尽量在真实的 Windows + Mac 环境里验证改动。
+- 改动通信协议时请同时更新两端，并在说明里注明是否与旧版本兼容。
 
 ## 版本记录
 
-- **1.3.13**：修复部分 Windows 键盘的音量旋钮切到 Mac 后无效的问题。支持驱动合成的音量加减和静音键，Mac 优先调节当前声音输出设备。请两端一起更新。
-- **1.3.12**：修复从 Windows 切到 Mac 后，单按 Q、H 等字母可能误触系统快捷键的问题。远端键盘事件不再继承 Mac 本机 Fn 状态，按住修饰键期间切换键位方案也能正确松键。
-- **1.3.11**：新增独立的双向文件传输：概览可拖入或多选文件发送，已配对设备免确认接收，两端显示进度并各自设置接收目录与大小上限。剪贴板改为切换设备时立即开始同步，无需先按一次粘贴。
-- **1.3.10**：修复跨端粘贴有时需要按两次的问题。Windows 在完成剪贴板写入后校验变化序号，按住粘贴键产生的重复事件不再打断自动粘贴。传输期间换窗口或继续输入时，仍不会向错误目标发送粘贴快捷键。
-- **1.3.9**：修复 Mac 复制 JPEG 后在 Windows 无法粘贴为图片的问题。两端现在都为单个支持的图片文件提供原文件和图片两种粘贴方式，新增静态 SVG/SVGZ、WebP、HEIC/HEIF、AVIF 等预览；不能生成预览时仍可粘贴原文件。
-- **1.3.8**：修复 Windows 复制 PNG 后在 Mac 应用中无法粘贴为图片的问题。单个不超过 64 MiB 的 PNG 文件同时提供原文件和图片内容，多选及超限文件仍按文件传输。
-- **1.3.7**：修复 Windows 误把资源管理器同名窗口当作操作面板，导致点击托盘后无法打开面板的问题。
-- **1.3.6**：Windows 交互安装、更新或重装成功后自动打开；取消、失败、卸载或静默部署时不启动。Mac 应用内更新由独立进程验签、替换并重新打开；安装失败时不自动打开旧版，诊断日志位于 ~/Library/Logs/KVMSwitch-update.log。
-- **1.3.5**：重构双端面板，适配深色模式和窄窗口；Mac 按实际键鼠事件发送权限检测授权，修复启动时授权变化未同步到对端的问题。
-- **1.3.4**：修复 Mac 应用包签名资源缺失；更新前校验完整性；两端授权引导改为“设备控制和数据访问”。
-- **1.3.3**：自动检查稳定版，确认后校验并安装，支持重装当前版本。
-- **1.3.2**：在操作面板中显式选择 Mac 或 Windows 操作键位，支持自定义修饰键对调。通信协议与 1.3.1 相同。
-- **1.3.1**：跨机剪切保留原件；拥塞时合并鼠标移动并在必要时释放按键；传输取消、重试和失败原因；媒体键接收回执；按本机显示器绑定，仅剩唯一候选时自动选择。协议升级，两端须同时更新至 1.3.1。
-- **1.3**：按需剪贴板与进度、显示器输入口向导、Windows 原生 WebView2 面板与 MSI、标准媒体键双向转发。
-- **1.2**：两台设备对等，键鼠可插在任意一台；Mac 端改为带菜单栏图标和操作面板的应用；设置双向同步；在面板里用密钥配对。
+完整的发布说明见 [Releases](https://github.com/kejimip/kvmswitch/releases)。
+
+- **1.3.13**：修复部分 Windows 键盘的音量旋钮切到 Mac 后无效的问题，支持驱动合成的音量键；Mac 优先直接调节当前声音输出设备。请两端一起更新。
+- **1.3.12**：修复从 Windows 切到 Mac 后，单按 Q、H 等字母可能误触系统快捷键的问题。
+- **1.3.11**：新增独立的双向文件传输；剪贴板改为切换时立即开始同步。
+- **1.3.10**：修复跨端粘贴有时需要按两次的问题。
+- **1.3.9**：修复 Mac 复制 JPEG 后在 Windows 无法粘贴为图片；新增 SVG、WebP、HEIC/HEIF、AVIF 等图片预览。
+- **1.3.8**：修复 Windows 复制 PNG 后在 Mac 应用中无法粘贴为图片。
+- **1.3.7**：修复点击托盘后有时无法打开面板。
+- **1.3.6**：安装或更新成功后自动打开；Mac 更新改由独立进程验签和替换。
+- **1.3.5**：重构双端面板，适配深色模式和窄窗口。
+- **1.3.4**：修复 Mac 应用包签名资源缺失，更新前校验完整性。
+- **1.3.3**：自动检查稳定版并支持应用内安装。
+- **1.3.2**：可选择 Mac 或 Windows 操作键位，支持自定义修饰键对调。
+- **1.3.1**：跨机剪切保留原件；输入拥塞处理；传输取消与重试；按显示器绑定切换。协议升级，与旧版不兼容。
+- **1.3**：按需剪贴板、显示器输入口向导、Windows WebView2 面板与 MSI 安装包、媒体键转发。
+- **1.2**：两台设备对等；Mac 端改为带菜单栏图标和面板的应用；设置双向同步。
 - **1.1**：Windows 端新增操作面板。
 - **1.0**：热键切换显示器和键鼠，剪贴板与文件同步。
+
+## 许可证
+
+[MIT](LICENSE) © 2026 kejimip
+
+---
+
+<a id="english"></a>
+
+## English
+
+**KVMSwitch** is a software KVM for one Windows PC and one Apple-silicon Mac that share a single monitor, keyboard and mouse.
+
+- Press a hotkey (default `Ctrl+F12`). The monitor switches its input through DDC/CI, and keyboard and mouse input moves to the other machine.
+- The clipboard follows you: text, images and files.
+- Both machines are equal peers. Plug the keyboard and mouse into either one. Both run the same control panel, and settings sync automatically.
+- All traffic stays on your LAN and is encrypted with AES-256-GCM, using a key derived from a shared pairing key.
+- Requirements: Windows 10/11 x64, an Apple-silicon Mac, and a monitor with DDC/CI enabled.
+- Download it from [Releases](https://github.com/kejimip/kvmswitch/releases/latest). Build it from source on Windows with `.\build.ps1`, which needs Go 1.26+ and rcodesign.
+- The UI is currently Chinese only. Issues and pull requests in English are welcome.
