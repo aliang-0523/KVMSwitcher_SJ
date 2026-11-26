@@ -45,10 +45,13 @@ type Config struct {
 	FileLimitMiB int64  `json:"file_limit_mib"`
 	FilePaused   bool   `json:"file_paused"`
 	MonitorID    string `json:"monitor_id"` // Local hardware path; never synchronized.
-	Schema       int    `json:"schema"`     // 配置文件格式版本
-	PairingKey   string `json:"pairing_key"`
-	Port         int    `json:"port"`
-	PeerHost     string `json:"peer_host,omitempty"` // 可选：手动指定对方 IP（仅主动发起连接的一端使用）
+	// OneWay 单向控制：本机只控制对端，不接受对端的键鼠注入、不让对端把键鼠拿走、
+	// 不采用对端改的设置；对端只能把键鼠和显示器交回本机。只在本机生效，故意不同步。
+	OneWay     bool   `json:"one_way"`
+	Schema     int    `json:"schema"` // 配置文件格式版本
+	PairingKey string `json:"pairing_key"`
+	Port       int    `json:"port"`
+	PeerHost   string `json:"peer_host,omitempty"` // 可选：手动指定对方 IP（仅主动发起连接的一端使用）
 
 	Hotkey          string  `json:"hotkey"`
 	EmergencyHotkey string  `json:"emergency_hotkey"`

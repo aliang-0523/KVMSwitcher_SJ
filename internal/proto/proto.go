@@ -108,6 +108,8 @@ type Info struct {
 	OS         string `json:"os"` // "windows" 或 "mac"
 	CanControl bool   `json:"can_control"`
 	Version    string `json:"version"`
+	// OneWay 表示发送方开启了单向控制：它只控制对方，对方只能把键鼠交回给它。
+	OneWay bool `json:"one_way,omitempty"`
 }
 
 type Conn struct {

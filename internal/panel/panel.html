@@ -96,6 +96,10 @@
       <div class="card"><div class="row"><div class="lbl"><b>测试媒体键</b><span id="mediaStatus" aria-live="polite"></span></div><button id="testMedia" class="btn">监听 60 秒</button></div><div class="note">在插键盘的电脑开启测试，再用热键切到对端并转动旋钮。只显示最近一个媒体键，不记录普通按键。“对端已收到”不代表音量已改变；若 Mac 没有反应，请在“系统设置 → 声音 → 输出”确认所选设备可调音量。</div></div>
       <p class="sub">键盘鼠标插在哪台设备上都可以。修改后立即生效，并自动同步到另一台设备。</p>
       <div class="card">
+        <h2>控制方向</h2>
+        <div class="row"><div class="lbl"><b>单向控制</b><span>开启后本机只控制另一台设备：不接受它发来的键鼠，不让它把键鼠拿走，也不采用它改的设置；它只能把键鼠和显示器交回本机。这一项只在本机生效，不会同步。</span></div><div class="ctl"><label class="sw"><input type="checkbox" data-k="one_way"><span></span></label></div></div>
+      </div>
+      <div class="card">
         <h2>热键</h2>
         <div class="row"><div class="lbl"><b>切换设备</b><span>点击右侧后直接按下新的组合键，按 Esc 取消</span></div><div class="ctl"><button class="hk" data-hk="hotkey"></button></div></div>
         <div class="row"><div class="lbl"><b>紧急拿回</b><span>把键鼠和显示器都拿回按下热键的这台设备</span></div><div class="ctl"><button class="hk" data-hk="emergency_hotkey"></button></div></div>
@@ -441,12 +445,15 @@ function render(s) {
   const paused = !!st.paused;
   $('#peerMeta').textContent = on ? '已连接 · ' + OSNAME[peerOS] : (paused ? '已手动断开' : '未连接');
   $('#peerTag').textContent = !on ? (paused ? '已断开' : '未连接') : (!here ? '键鼠在这里' : '待命');
-  $('#goBtn').disabled = !on;
-  $('#goBtn').title = here ? '切换到 ' + peer : '切回本机';
+  // 对端开启单向控制时，本机只能在被它控制期间把键鼠交回去。
+  const handBackOnly = on && st.peer_one_way;
+  $('#goBtn').disabled = !on || (handBackOnly && st.active !== 'self');
+  $('#goBtn').title = handBackOnly ? (st.active === 'self' ? '把键鼠和显示器交回 ' + peer : peer + ' 开启了单向控制，只能在它上面切换') : here ? '切换到 ' + peer : '切回本机';
   $('#homeSub').textContent = paused ? '已手动断开连接，两台设备各自独立。在“运行状态”里点“重新连接”即可恢复。' : !on ? '另一台设备还没有连接，暂时无法切换。' : (here ? '键盘、鼠标和显示器现在属于本机。' : '键盘、鼠标和显示器现在属于 ' + peer + '。');
 
-  const selfBad = s.self_os === 'mac' && !st.self_can_control;
-  const peerBad = on && st.peer_os === 'mac' && !st.peer_can_control;
+  // 单向控制的 Mac 本来就不接收键鼠，不需要提示授权。
+  const selfBad = s.self_os === 'mac' && !st.self_can_control && !st.self_one_way;
+  const peerBad = on && st.peer_os === 'mac' && !st.peer_can_control && !st.peer_one_way;
   $('#selfBanner').classList.toggle('show', selfBad);
   $('#peerBanner').classList.toggle('show', peerBad);
   setSt($('#ckConn'), on ? 'ok' : paused ? 'off' : 'bad', on ? '已连接' : paused ? '已断开' : '未连接');
@@ -455,7 +462,8 @@ function render(s) {
   $('#connBtn').hidden = !on && !paused;
   $('#connBtn').textContent = paused ? '重新连接' : '断开';
   $('#connBtn').dataset.paused = paused ? '1' : '';
-  if (s.self_os === 'mac') setSt($('#ckAx'), st.self_can_control ? 'ok' : 'warn', st.self_can_control ? '已授权' : '未授权');
+  if (s.self_os === 'mac' ? st.self_one_way : on && st.peer_one_way) setSt($('#ckAx'), 'ok', '单向控制，不接收');
+  else if (s.self_os === 'mac') setSt($('#ckAx'), st.self_can_control ? 'ok' : 'warn', st.self_can_control ? '已授权' : '未授权');
   else if (!on || !st.peer_os) setSt($('#ckAx'), 'off', on ? '等待对端报告' : '未知');
   else setSt($('#ckAx'), st.peer_can_control ? 'ok' : 'warn', st.peer_can_control ? '已授权' : '未授权');
 

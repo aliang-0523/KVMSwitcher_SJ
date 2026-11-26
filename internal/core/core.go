@@ -162,6 +162,8 @@ func (c *Core) refresh() {
 		PeerOS:         c.peer.OS,
 		PeerCanControl: c.peer.CanControl,
 		SelfCanControl: c.selfCan,
+		SelfOneWay:     c.Config().OneWay,
+		PeerOneWay:     c.peer.OneWay,
 	}
 	c.stMu.Lock()
 	c.st = s
@@ -170,7 +172,15 @@ func (c *Core) refresh() {
 }
 
 func (c *Core) selfInfo() proto.Info {
-	return proto.Info{Files: true, Name: c.P.Hostname(), OS: c.P.OS(), CanControl: c.selfCan, Version: Version}
+	oneWay := c.Config().OneWay
+	// 单向控制时如实报告“不可被控制”，对端据此不会尝试把键鼠切过来。
+	return proto.Info{Files: true, Name: c.P.Hostname(), OS: c.P.OS(), CanControl: c.selfCan && !oneWay, Version: Version, OneWay: oneWay}
+}
+
+// injectable 报告此刻是否允许把对端发来的键鼠注入本机，供读连接的 goroutine 调用。
+// 单向控制下无论处于什么状态都不注入：这是安全边界，不能依赖对端守规矩。
+func (c *Core) injectable() bool {
+	return c.activeA.Load() == 1 && !c.Config().OneWay
 }
 
 // Compare against the value already published by Start, not a second startup sample.
@@ -265,6 +275,14 @@ func (c *Core) ApplyConfig(next *Config) error {
 			return
 		}
 		c.install(next, p)
+		if old.OneWay != next.OneWay {
+			// 立即收回（或恢复）注入能力，并让对端知道本机还能不能被控制。
+			c.P.SetControlled(c.active == ActiveSelf && !next.OneWay)
+			if c.ctrl != nil {
+				c.ctrl.WriteJSON(proto.MsgInfo, c.selfInfo())
+			}
+			log.Printf("单向控制已%s", map[bool]string{true: "开启：只控制对端，不接受对端的键鼠和设置", false: "关闭"}[next.OneWay])
+		}
 		if c.ctrl != nil {
 			c.ctrl.WriteJSON(proto.MsgConfig, next.Shared())
 		}
@@ -385,12 +403,20 @@ func (c *Core) switchTo(target string) {
 		c.P.Notify("无法切换", "另一台设备未连接。请确认它上面的 KVMSwitch 正在运行，且两台设备在同一局域网。")
 		return
 	}
-	if target == ActivePeer && !c.peer.CanControl {
+	if c.peer.OneWay {
+		// 对端只控制本机、不接受本机的键鼠：本机唯一能做的是把正由对端控制的键鼠交回去。
+		if target != ActivePeer || c.active != ActiveSelf {
+			c.P.Beep()
+			c.P.Notify("无法切换", c.peerLabel()+" 开启了单向控制，只能在它上面切换。")
+			return
+		}
+	} else if target == ActivePeer && !c.peer.CanControl {
 		c.P.Beep()
 		c.P.Notify("无法切换", c.peerLabel()+" 还没有授予键鼠控制权限，切过去后键鼠无法使用。")
 		return
 	}
-	if target == ActiveSelf && !c.selfCan {
+	// 单向控制时“键鼠在本机”只是本机自己用，不接收注入，因此不需要注入权限。
+	if target == ActiveSelf && !c.selfCan && !c.Config().OneWay {
 		c.P.Beep()
 		c.P.Notify("无法切换", "本机还没有授予键鼠控制权限，无法接受另一台设备的键鼠。")
 		return
@@ -437,7 +463,7 @@ func (c *Core) setActive(a string) {
 		c.P.SetForward(false)
 		c.drainInput()
 	}
-	c.P.SetControlled(a == ActiveSelf)
+	c.P.SetControlled(a == ActiveSelf && !c.Config().OneWay)
 	if a == ActivePeer {
 		c.drainInput()
 		c.P.SetForward(true)
@@ -462,6 +488,14 @@ func (c *Core) drainInput() {
 
 // onActive 处理对端发起的切换。
 func (c *Core) onActive(m proto.Active) {
+	if m.Who == "sender" && c.Config().OneWay {
+		// 单向控制：对端只能交回键鼠，不能把它拿走（否则本机会把按键转发给对端）。
+		if c.active != ActivePeer {
+			log.Printf("已拒绝 %s 接管键鼠：本机开启了单向控制", c.peerLabel())
+			c.reassert(m.Monitor)
+		}
+		return
+	}
 	target := ActiveNone
 	switch m.Who {
 	case "sender":
@@ -490,6 +524,30 @@ func (c *Core) onActive(m proto.Active) {
 			pc.WriteJSON(proto.MsgDDCResult, r)
 		}
 	}()
+}
+
+// reassert 在拒绝对端的切换后，把本机实际的键鼠归属重新告诉对端，让两端状态一致。
+// 若对端已顺手把显示器切走而键鼠正在本机，就请它把显示器切回本机，本机也自己试一次。
+func (c *Core) reassert(monitor bool) {
+	if c.ctrl == nil {
+		return
+	}
+	who := "none"
+	if c.active == ActiveSelf {
+		who = "sender"
+	}
+	mon := monitor && who == "sender" && c.Config().SwitchMonitor
+	c.seq++
+	c.ctrl.WriteJSON(proto.MsgActive, proto.Active{Who: who, Seq: c.seq, Monitor: mon})
+	if mon {
+		self, _ := c.inputs()
+		cfg := c.Config()
+		go func() {
+			if err := c.P.SetMonitorInput(self, cfg); err != nil {
+				log.Printf("把显示器切回本机未成功: %v", err)
+			}
+		}()
+	}
 }
 
 func (c *Core) startDDC(target, prev string) {
@@ -1000,7 +1058,7 @@ func (c *Core) runControl(pc *proto.Conn) {
 			pasteVDown = false
 			done := make(chan struct{})
 			c.do(func() {
-				if c.ctrl == pc && c.active == ActiveSelf {
+				if c.ctrl == pc && c.active == ActiveSelf && !c.Config().OneWay {
 					c.P.SetControlled(false)
 					c.P.SetControlled(true)
 				}
@@ -1069,7 +1127,7 @@ func (c *Core) runControl(pc *proto.Conn) {
 				}
 			})
 		case proto.MsgKey:
-			if len(p) >= 5 && c.activeA.Load() == 1 {
+			if len(p) >= 5 && c.injectable() {
 				vk, down := binary.BigEndian.Uint16(p), p[4]&proto.KeyFlagDown != 0
 				if down && !(vk == 0x56 && pasteVDown) {
 					c.Interacted()
@@ -1083,16 +1141,16 @@ func (c *Core) runControl(pc *proto.Conn) {
 				}
 			}
 		case proto.MsgMouseMove:
-			if len(p) >= 8 && c.activeA.Load() == 1 {
+			if len(p) >= 8 && c.injectable() {
 				c.P.InjectMove(int32(binary.BigEndian.Uint32(p)), int32(binary.BigEndian.Uint32(p[4:])))
 			}
 		case proto.MsgMouseButton:
-			if len(p) >= 2 && c.activeA.Load() == 1 {
+			if len(p) >= 2 && c.injectable() {
 				c.Interacted()
 				c.P.InjectButton(int(p[0]), p[1] != 0)
 			}
 		case proto.MsgWheel:
-			if len(p) >= 8 && c.activeA.Load() == 1 {
+			if len(p) >= 8 && c.injectable() {
 				c.Interacted()
 				c.P.InjectWheel(int32(binary.BigEndian.Uint32(p)), int32(binary.BigEndian.Uint32(p[4:])))
 			}
@@ -1141,6 +1199,21 @@ func (c *Core) detach() {
 func (c *Core) onPeerConfig(s Shared) {
 	cur := c.Config()
 	if s.Rev <= cur.Rev {
+		return
+	}
+	if cur.OneWay {
+		// 单向控制以本机设置为准：不采用对端的改动，并把本机设置标为更新后推回去，让两端一致。
+		// 两端都开了单向控制时只忽略，避免互相改写版本号来回推送。
+		log.Printf("已忽略 %s 发来的设置：本机开启了单向控制，以本机设置为准", c.peerLabel())
+		if c.ctrl != nil && !c.peer.OneWay {
+			next := *cur
+			next.Rev = s.Rev + 1
+			if err := SaveConfig(c.opt.ConfigPath, &next); err != nil {
+				log.Printf("保存设置失败: %v", err)
+			}
+			c.install(&next, c.parsed)
+			c.ctrl.WriteJSON(proto.MsgConfig, next.Shared())
+		}
 		return
 	}
 	next := cur.WithShared(s)

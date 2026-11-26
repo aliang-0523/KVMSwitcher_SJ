@@ -63,6 +63,8 @@ type State struct {
 	PeerOS         string `json:"peer_os"`
 	PeerCanControl bool   `json:"peer_can_control"`
 	SelfCanControl bool   `json:"self_can_control"`
+	SelfOneWay     bool   `json:"self_one_way"` // 本机开启了单向控制
+	PeerOneWay     bool   `json:"peer_one_way"` // 对端开启了单向控制
 }
 
 // InputEvent 是一次采集到的键鼠事件，Typ 为 proto.MsgKey / MsgMouseMove / MsgMouseButton / MsgWheel。
