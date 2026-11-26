@@ -64,6 +64,8 @@
 
 Mac 建议走 USB-C/雷雳口而不是自带的 HDMI 口：部分 Mac 的 HDMI 口不能发送切换显示器的指令。显示器菜单里如果有“DDC/CI”选项，请确认是开启的。
 
+部分显示器不认标准的输入口编号（HDMI1=17、HDMI2=18、DP1=15、DP2=16），选了正确的口也切不过去。这时可以在 Windows 上用 [ControlMyMonitor](https://www.nirsoft.net/utils/control_my_monitor.html) 双击 `60 Input Select`，逐个试写数字，找出能切到每台设备的编号，然后在面板的“显示器”页把对应接口改成 **自定义编号** 并填入。注意：显示器读出来的当前值不一定等于切换时要写的值。
+
 ### 2. 安装
 
 **Windows**：运行 MSI 安装（按当前用户安装，不需要管理员权限），也可以直接双击便携版 `kvmswitch.exe`。首次运行时防火墙会询问是否允许联网，选**允许（专用网络）**。
@@ -220,6 +222,7 @@ go run github.com/akavel/rsrc@v0.10.2 -arch amd64 -ico packaging/KVMSwitch.ico -
 
 完整的发布说明见 [Releases](https://github.com/aliang-0523/KVMSwitcher_SJ/releases)。
 
+- **1.3.15**：显示器接口支持“自定义编号”，用于不认标准输入口编号的显示器；Mac 端发送切换指令时自动补发，避免显示器偶尔丢指令导致切换失败。
 - **1.3.14**：安全修复：Mac 端切换命令（`mac_ddc_command`）改为只在本机生效，不再从对端同步；执行时不再经过 shell，第一个词须为程序绝对路径，并增加 5 秒超时。原来使用管道、引号等 shell 写法的，请改为脚本并填写脚本的绝对路径。
 - **1.3.13**：修复部分 Windows 键盘的音量旋钮切到 Mac 后无效的问题，支持驱动合成的音量键；Mac 优先直接调节当前声音输出设备。请两端一起更新。
 - **1.3.12**：修复从 Windows 切到 Mac 后，单按 Q、H 等字母可能误触系统快捷键的问题。

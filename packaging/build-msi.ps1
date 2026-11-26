@@ -1,4 +1,4 @@
-param([string]$Version='1.3.14',[string]$WixBin=$env:WIX_BIN)
+param([string]$Version='1.3.15',[string]$WixBin=$env:WIX_BIN)
 $ErrorActionPreference='Stop'
 Push-Location (Split-Path $PSScriptRoot)
 try {

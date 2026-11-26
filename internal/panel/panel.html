@@ -71,8 +71,8 @@
       <p class="sub">两台设备各接显示器的一个输入口，切换时由软件通知显示器换口。</p>
       <div class="card">
         <div class="row"><div class="lbl"><b>切换时同时切换显示器</b><span>关闭后只切换键鼠和剪贴板，适合两台设备各有屏幕的情况</span></div><div class="ctl"><label class="sw"><input type="checkbox" data-k="switch_monitor"><span></span></label></div></div>
-        <div class="row"><div class="lbl"><b>Windows 接在显示器的</b><span>看显示器背后 Windows 电脑的线插在哪个口</span></div><div class="ctl"><select data-k="windows_input" class="port"></select></div></div>
-        <div class="row"><div class="lbl"><b>Mac 接在显示器的</b><span>建议 Mac 用 USB-C/雷雳口转 DP 连接</span></div><div class="ctl"><select data-k="mac_input" class="port"></select></div></div>
+        <div class="row"><div class="lbl"><b>Windows 接在显示器的</b><span>看显示器背后 Windows 电脑的线插在哪个口；标准编号切不动时选“自定义编号”</span></div><div class="ctl"><select data-k="windows_input" class="port"></select><input type="text" class="portnum" hidden placeholder="编号，如 5 或 0x05" style="min-width:0;width:140px" autocomplete="off" spellcheck="false"></div></div>
+        <div class="row"><div class="lbl"><b>Mac 接在显示器的</b><span>建议 Mac 用 USB-C/雷雳口转 DP 连接</span></div><div class="ctl"><select data-k="mac_input" class="port"></select><input type="text" class="portnum" hidden placeholder="编号，如 8 或 0x08" style="min-width:0;width:140px" autocomplete="off" spellcheck="false"></div></div>
       </div>
       <div class="card">
         <h2>验证</h2>
@@ -227,11 +227,20 @@ $$('[data-goto]').forEach(b => b.onclick = () => show(b.dataset.goto));
 const PORTS = { hdmi1: 'HDMI 1', hdmi2: 'HDMI 2', dp1: 'DP 1', dp2: 'DP 2' };
 const MODS = { control: 'Control ⌃', option: 'Option ⌥', command: 'Command ⌘' };
 const OSNAME = { windows: 'Windows', mac: 'Mac' };
-$$('select.port').forEach(s => { for (const k in PORTS) s.add(new Option(PORTS[k], k)); });
+// 部分显示器不认标准编号（15–18），需要填厂商自己的编号。
+const CUSTOM_PORT = 'custom';
+$$('select.port').forEach(s => { for (const k in PORTS) s.add(new Option(PORTS[k], k)); s.add(new Option('自定义编号…', CUSTOM_PORT)); });
+// 与 core.ParseInput 一致：十进制或 0x 开头的十六进制，范围 1–65535；统一存成十进制字符串。
+function parsePortNum(t) {
+  t = String(t ?? '').trim().toLowerCase();
+  if (!/^(0x[0-9a-f]+|[1-9][0-9]*)$/.test(t)) return null;
+  const n = Number(t);
+  return n >= 1 && n <= 0xffff ? String(n) : null;
+}
 $$('select.mod').forEach(s => { for (const k in MODS) s.add(new Option(MODS[k], k)); });
 
 let cfg = null, state = null, formSig = '';
-function portName(v) { return PORTS[String(v).toLowerCase()] || v; }
+function portName(v) { return PORTS[String(v).toLowerCase()] || ('编号 ' + v); }
 function sharedSig(c) { return String(c.rev) + '|' + c.pairing_key + '|' + (c.peer_host || ''); }
 
 const layouts = {
@@ -249,7 +258,11 @@ function fill(c) {
     const v = c[el.dataset.k];
     if (el.type === 'checkbox') el.checked = !!v;
     else {
-      if (el.tagName === 'SELECT' && !Array.from(el.options).some(o => o.value === String(v).toLowerCase())) el.add(new Option(v, v));
+      if (el.tagName === 'SELECT' && !Array.from(el.options).some(o => o.value === String(v).toLowerCase())) {
+        const port = el.classList.contains('port');
+        el.add(new Option(port ? portName(v) : v, String(v).toLowerCase()), port ? el.querySelector('option[value="' + CUSTOM_PORT + '"]') : null);
+      }
+      if (el.classList.contains('port')) el.nextElementSibling.hidden = true;
       el.value = el.tagName === 'SELECT' ? String(v).toLowerCase() : v;
     }
   });
@@ -268,6 +281,7 @@ function collect() {
   $$('[data-k]').forEach(el => {
     const k = el.dataset.k;
     if (el.type === 'checkbox') out[k] = el.checked;
+    else if (el.classList.contains('port') && el.value === CUSTOM_PORT) { if (cfg) out[k] = cfg[k]; }
     else if (el.type === 'range' || el.type === 'number') out[k] = Number(el.value);
     else out[k] = el.value.trim();
   });
@@ -289,6 +303,14 @@ async function save(patch) {
 }
 $$('[data-k]').forEach(el => {
   el.addEventListener(el.type === 'range' ? 'input' : 'change', () => {
+    // 选“自定义编号”时先输入数字，按回车或离开输入框后再保存。
+    if (el.classList.contains('port') && el.value === CUSTOM_PORT) {
+      const box = el.nextElementSibling;
+      box.value = parsePortNum(cfg && cfg[el.dataset.k]) || '';
+      box.hidden = false;
+      box.focus();
+      return;
+    }
     // Keep the bidirectional modifier map one-to-one when manually remapping a key.
     if (el.classList.contains('mod') && cfg) {
       const other = $$('select.mod').find(x => x !== el && x.value === el.value);
@@ -297,6 +319,29 @@ $$('[data-k]').forEach(el => {
     if (el.type === 'range') { $('[data-val="' + el.dataset.k + '"]').textContent = Number(el.value).toFixed(1) + '×'; }
     clearTimeout(saveTimer);
     saveTimer = setTimeout(() => save(), el.type === 'range' ? 350 : 0);
+  });
+});
+$$('input.portnum').forEach(box => {
+  const sel = box.previousElementSibling;
+  const cancel = () => { box.hidden = true; if (cfg) fill(cfg); };
+  const commit = () => {
+    if (box.hidden) return;
+    const v = parsePortNum(box.value);
+    if (v === null) {
+      toast('请输入 1–65535 的数字，十六进制写成 0x05 的形式', true);
+      return false;
+    }
+    box.hidden = true;
+    save({ [sel.dataset.k]: v });
+    return true;
+  };
+  box.addEventListener('keydown', e => {
+    if (e.key === 'Enter') { e.preventDefault(); commit(); }
+    else if (e.key === 'Escape') { e.preventDefault(); cancel(); }
+  });
+  box.addEventListener('blur', () => {
+    if (box.hidden) return;
+    if (box.value.trim() === '' || commit() === false) cancel();
   });
 });
 $('#keyLayout').onchange = async e => {
@@ -417,7 +462,7 @@ function render(s) {
   if (document.activeElement !== $('#autostart')) $('#autostart').checked = s.autostart;
 
   // 另一台设备改了设置、或密钥变了：刷新表单（正在编辑时不打断）
-  const editing = saving || rec || (document.activeElement && document.activeElement.matches('[data-k]'));
+  const editing = saving || rec || (document.activeElement && document.activeElement.matches('[data-k], input.portnum'));
   if (!cfg || (sharedSig(s.config) !== formSig && !editing)) fill(s.config);
   renderPorts();
 }

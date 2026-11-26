@@ -233,13 +233,22 @@ func ddcSetInput(v uint16, externalCmd, id string) error {
 			sum ^= b
 		}
 		pkt[5] = sum
+		// I2C 层返回成功不代表显示器真的执行了：实测部分显示器会偶尔丢掉指令，
+		// 所以即使已被接受也再补发几次（同一输入口重复写入无副作用），
+		// 两次之间按 DDC/CI 要求至少间隔 50ms。
+		const sends = 3
+		accepted := false
 		var kr int32
-		for i := 0; i < 2; i++ {
-			time.Sleep(40 * time.Millisecond)
-			kr = ioAVServiceWriteI2C(av, 0x37, 0x51, &pkt[0], uint32(len(pkt)))
-			if kr == 0 {
-				return nil
+		for i := 0; i < sends+2 && (!accepted || i < sends); i++ {
+			time.Sleep(100 * time.Millisecond)
+			if r := ioAVServiceWriteI2C(av, 0x37, 0x51, &pkt[0], uint32(len(pkt))); r == 0 {
+				accepted = true
+			} else {
+				kr = r
 			}
+		}
+		if accepted {
+			return nil
 		}
 		return fmt.Errorf("显示器未接受 DDC 指令 (0x%x)", uint32(kr))
 	})
