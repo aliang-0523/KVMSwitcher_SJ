@@ -57,6 +57,7 @@ type State struct {
 	FileSession    string `json:"file_session"`
 	PeerFiles      bool   `json:"peer_files"`
 	Connected      bool   `json:"connected"`
+	Paused         bool   `json:"paused"` // 用户手动断开了连接
 	Active         string `json:"active"`
 	PeerName       string `json:"peer_name"`
 	PeerOS         string `json:"peer_os"`

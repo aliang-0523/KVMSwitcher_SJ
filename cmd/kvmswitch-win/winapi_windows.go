@@ -59,6 +59,8 @@ var (
 	pGlobalUnlock            = kernel32.NewProc("GlobalUnlock")
 	pGlobalSize              = kernel32.NewProc("GlobalSize")
 	pSetThreadExecutionState = kernel32.NewProc("SetThreadExecutionState")
+	pSetProcessInformation   = kernel32.NewProc("SetProcessInformation")
+	pGetCurrentProcess       = kernel32.NewProc("GetCurrentProcess")
 	pAttachConsole           = kernel32.NewProc("AttachConsole")
 	pGetModuleHandleW        = kernel32.NewProc("GetModuleHandleW")
 
@@ -110,4 +112,18 @@ func messageBoxTimeout(text, title string, flags uintptr, ms uint32) int {
 
 func shellOpen(target string) {
 	pShellExecuteW.Call(0, uintptr(unsafe.Pointer(u16("open"))), uintptr(unsafe.Pointer(u16(target))), 0, 0, 1)
+}
+
+// disablePowerThrottling 让 Windows 不对本进程启用 EcoQoS（后台降速）。
+// 托盘程序没有前台窗口，Windows 11 会把它当作后台进程降低调度优先级与时钟频率，
+// 使键鼠钩子回调和网络收发出现几到几十毫秒的抖动。旧系统不支持时静默忽略。
+func disablePowerThrottling() {
+	if pSetProcessInformation.Find() != nil {
+		return
+	}
+	// PROCESS_POWER_THROTTLING_STATE：Version=1，ControlMask=EXECUTION_SPEED，StateMask=0（关闭）
+	state := [3]uint32{1, 1, 0}
+	h, _, _ := pGetCurrentProcess.Call()
+	const processPowerThrottling = 4
+	pSetProcessInformation.Call(h, processPowerThrottling, uintptr(unsafe.Pointer(&state[0])), unsafe.Sizeof(state))
 }

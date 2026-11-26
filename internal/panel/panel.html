@@ -55,7 +55,7 @@
         <div id="ftNow"></div></div>
       <div class="card checks">
         <h2>运行状态</h2>
-        <div class="row"><div class="lbl"><b>两台设备的连接</b><span id="ckConnTxt"></span></div><div class="ctl"><button class="link" data-goto="pair" id="ckConnLink">去连接</button><span class="st" id="ckConn"></span></div></div>
+        <div class="row"><div class="lbl"><b>两台设备的连接</b><span id="ckConnTxt"></span></div><div class="ctl"><button class="link" data-goto="pair" id="ckConnLink">去连接</button><button class="btn" id="connBtn">断开</button><span class="st" id="ckConn"></span></div></div>
         <div class="row"><div class="lbl"><b>Mac 键鼠控制权限</b><span>显示 Mac 是否获准接收并执行另一台设备发来的键鼠事件</span></div><div class="ctl"><span class="st" id="ckAx"></span></div></div>
         <div class="row"><div class="lbl"><b>显示器随切换</b><span id="ckMonTxt"></span></div><div class="ctl"><button class="link" data-goto="display">设置</button><span class="st" id="ckMon"></span></div></div>
         <div class="row"><div class="lbl"><b>剪贴板同步</b><span>切换时开始同步，接收完成后直接粘贴</span></div><div class="ctl"><button class="link" data-goto="clip">设置</button><span class="st" id="ckClip"></span></div></div>
@@ -438,19 +438,23 @@ function render(s) {
   $('#selfMeta').textContent = '本机 · ' + OSNAME[s.self_os];
   $('#selfTag').textContent = here ? '键鼠在这里' : '待命';
   $('#peerName').textContent = peer;
-  $('#peerMeta').textContent = on ? '已连接 · ' + OSNAME[peerOS] : '未连接';
-  $('#peerTag').textContent = !on ? '未连接' : (!here ? '键鼠在这里' : '待命');
+  const paused = !!st.paused;
+  $('#peerMeta').textContent = on ? '已连接 · ' + OSNAME[peerOS] : (paused ? '已手动断开' : '未连接');
+  $('#peerTag').textContent = !on ? (paused ? '已断开' : '未连接') : (!here ? '键鼠在这里' : '待命');
   $('#goBtn').disabled = !on;
   $('#goBtn').title = here ? '切换到 ' + peer : '切回本机';
-  $('#homeSub').textContent = !on ? '另一台设备还没有连接，暂时无法切换。' : (here ? '键盘、鼠标和显示器现在属于本机。' : '键盘、鼠标和显示器现在属于 ' + peer + '。');
+  $('#homeSub').textContent = paused ? '已手动断开连接，两台设备各自独立。在“运行状态”里点“重新连接”即可恢复。' : !on ? '另一台设备还没有连接，暂时无法切换。' : (here ? '键盘、鼠标和显示器现在属于本机。' : '键盘、鼠标和显示器现在属于 ' + peer + '。');
 
   const selfBad = s.self_os === 'mac' && !st.self_can_control;
   const peerBad = on && st.peer_os === 'mac' && !st.peer_can_control;
   $('#selfBanner').classList.toggle('show', selfBad);
   $('#peerBanner').classList.toggle('show', peerBad);
-  setSt($('#ckConn'), on ? 'ok' : 'bad', on ? '已连接' : '未连接');
-  $('#ckConnTxt').textContent = on ? peer : '两台设备都运行 KVMSwitch 并使用同一个密钥后会自动连接';
-  $('#ckConnLink').hidden = on;
+  setSt($('#ckConn'), on ? 'ok' : paused ? 'off' : 'bad', on ? '已连接' : paused ? '已断开' : '未连接');
+  $('#ckConnTxt').textContent = on ? peer : paused ? '已手动断开，不会自动重连' : '两台设备都运行 KVMSwitch 并使用同一个密钥后会自动连接';
+  $('#ckConnLink').hidden = on || paused;
+  $('#connBtn').hidden = !on && !paused;
+  $('#connBtn').textContent = paused ? '重新连接' : '断开';
+  $('#connBtn').dataset.paused = paused ? '1' : '';
   if (s.self_os === 'mac') setSt($('#ckAx'), st.self_can_control ? 'ok' : 'warn', st.self_can_control ? '已授权' : '未授权');
   else if (!on || !st.peer_os) setSt($('#ckAx'), 'off', on ? '等待对端报告' : '未知');
   else setSt($('#ckAx'), st.peer_can_control ? 'ok' : 'warn', st.peer_can_control ? '已授权' : '未授权');
@@ -476,6 +480,17 @@ async function tick() {
     if (++misses >= 3) $('#gone').classList.add('show');
   }
 }
+
+$('#connBtn').onclick = async e => {
+  const el = e.currentTarget, resume = el.dataset.paused === '1';
+  el.disabled = true;
+  try {
+    await api('/api/connection', { paused: !resume });
+    toast(resume ? '正在重新连接…' : '已断开连接');
+    await tick();
+  } catch (err) { toast(err.message, true); }
+  finally { el.disabled = false; }
+};
 
 $('#goBtn').onclick = async () => {
   try { await api('/api/toggle', {}); setTimeout(tick, 150); } catch (e) { toast(e.message, true); }

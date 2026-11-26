@@ -6,6 +6,7 @@
 package proto
 
 import (
+	"bufio"
 	"crypto/aes"
 	"crypto/cipher"
 	"crypto/hmac"
@@ -111,6 +112,7 @@ type Info struct {
 
 type Conn struct {
 	c       net.Conn
+	br      *bufio.Reader // 一次系统调用读入多帧，减少高频键鼠事件的读开销
 	rd, wr  cipher.AEAD
 	rn, wn  uint64
 	wmu     sync.Mutex
@@ -168,7 +170,7 @@ func Client(c net.Conn, key []byte, channel byte) (*Conn, error) {
 	if _, err := io.ReadFull(c, sn); err != nil {
 		return nil, err
 	}
-	pc := &Conn{c: c, Channel: channel}
+	pc := &Conn{c: c, Channel: channel, br: bufio.NewReaderSize(c, 64<<10)}
 	pc.wr, pc.rd = derive(key, cn, sn, channel)
 	if err := pc.Write(MsgHello, nil); err != nil {
 		return nil, err
@@ -199,7 +201,7 @@ func Server(c net.Conn, key []byte) (*Conn, error) {
 	if _, err := c.Write(sn); err != nil {
 		return nil, err
 	}
-	pc := &Conn{c: c, Channel: ch}
+	pc := &Conn{c: c, Channel: ch, br: bufio.NewReaderSize(c, 64<<10)}
 	pc.rd, pc.wr = derive(key, cn, sn, ch)
 	t, _, err := pc.Read()
 	if err != nil || t != MsgHello {
@@ -217,17 +219,27 @@ func nonce(n uint64) []byte {
 	return b
 }
 
-// Write 可并发调用。
-func (c *Conn) Write(typ byte, payload []byte) error {
-	c.wmu.Lock()
-	defer c.wmu.Unlock()
+// Frame 是一帧待发送的明文消息。
+type Frame struct {
+	Typ     byte
+	Payload []byte
+}
+
+// seal 把一帧加密后追加到 out，须持有 wmu。
+func (c *Conn) seal(out []byte, typ byte, payload []byte) []byte {
 	plain := make([]byte, 1+len(payload))
 	plain[0] = typ
 	copy(plain[1:], payload)
-	out := make([]byte, 4, 4+len(plain)+16)
+	start := len(out)
+	out = append(out, 0, 0, 0, 0)
 	out = c.wr.Seal(out, nonce(c.wn), plain, nil)
 	c.wn++
-	binary.BigEndian.PutUint32(out[:4], uint32(len(out)-4))
+	binary.BigEndian.PutUint32(out[start:], uint32(len(out)-start-4))
+	return out
+}
+
+// flush 一次性写出已加密的数据，须持有 wmu。
+func (c *Conn) flush(out []byte) error {
 	// Bound stalled writes: after a partial frame the connection cannot be reused.
 	c.c.SetWriteDeadline(time.Now().Add(8 * time.Second))
 	_, err := c.c.Write(out)
@@ -235,6 +247,27 @@ func (c *Conn) Write(typ byte, payload []byte) error {
 		c.c.Close()
 	}
 	return err
+}
+
+// Write 可并发调用。
+func (c *Conn) Write(typ byte, payload []byte) error {
+	c.wmu.Lock()
+	defer c.wmu.Unlock()
+	return c.flush(c.seal(make([]byte, 0, 4+1+len(payload)+16), typ, payload))
+}
+
+// WriteFrames 把多帧合并成一次写入（同一个 TCP 包），用于积压的键鼠事件。可并发调用。
+func (c *Conn) WriteFrames(fs []Frame) error {
+	if len(fs) == 0 {
+		return nil
+	}
+	c.wmu.Lock()
+	defer c.wmu.Unlock()
+	out := make([]byte, 0, len(fs)*(4+1+16+13))
+	for _, f := range fs {
+		out = c.seal(out, f.Typ, f.Payload)
+	}
+	return c.flush(out)
 }
 
 func (c *Conn) WriteJSON(typ byte, v any) error {
@@ -247,7 +280,7 @@ func (c *Conn) WriteJSON(typ byte, v any) error {
 
 // Read 只能由单个 goroutine 调用。
 func (c *Conn) Read() (byte, []byte, error) {
-	if _, err := io.ReadFull(c.c, c.hdr[:]); err != nil {
+	if _, err := io.ReadFull(c.br, c.hdr[:]); err != nil {
 		return 0, nil, err
 	}
 	n := binary.BigEndian.Uint32(c.hdr[:])
@@ -255,7 +288,7 @@ func (c *Conn) Read() (byte, []byte, error) {
 		return 0, nil, fmt.Errorf("非法帧长度 %d", n)
 	}
 	buf := make([]byte, n)
-	if _, err := io.ReadFull(c.c, buf); err != nil {
+	if _, err := io.ReadFull(c.br, buf); err != nil {
 		return 0, nil, err
 	}
 	plain, err := c.rd.Open(buf[:0], nonce(c.rn), buf, nil)

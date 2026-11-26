@@ -178,6 +178,17 @@ func Start(c *core.Core, h Host, logs *LogRing, dialer bool) (*Server, error) {
 		c.Toggle()
 		writeJSON(w, 200, ok)
 	})
+	post("/api/connection", func(w http.ResponseWriter, r *http.Request) {
+		var b struct {
+			Paused *bool `json:"paused"`
+		}
+		if readBody(r, &b) != nil || b.Paused == nil {
+			fail(w, 400, "提交的内容格式有误")
+			return
+		}
+		c.SetPaused(*b.Paused)
+		writeJSON(w, 200, ok)
+	})
 	post("/api/config", func(w http.ResponseWriter, r *http.Request) {
 		next := *c.Config() // 以当前配置为底，只覆盖提交的字段
 		if err := readBody(r, &next); err != nil {

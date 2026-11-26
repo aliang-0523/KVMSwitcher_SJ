@@ -133,6 +133,7 @@ func main() {
 	if pSetProcessDpiCtx.Find() == nil {
 		pSetProcessDpiCtx.Call(^uintptr(3)) // PER_MONITOR_AWARE_V2 = -4
 	}
+	disablePowerThrottling()
 
 	// 单实例：再次启动时只是让已运行的实例打开面板
 	// KVM_INSTANCE 仅用于调试：让一个测试实例与正式实例并存

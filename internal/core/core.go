@@ -49,6 +49,8 @@ type Core struct {
 	ev      chan func()
 	input   inputQueue
 	kick    chan struct{} // 让拨号循环立即重试
+	paused  atomic.Bool   // 用户手动断开：不再拨号、拒绝新连接，直到用户重新连接（不持久化，重启后恢复自动连接）
+	quiet   bool          // 下一次 detach 由手动断开引起：不弹“连接中断”通知
 
 	parsed   Parsed
 	active   string
@@ -154,7 +156,7 @@ func (c *Core) inputs() (self, peer uint16) {
 
 func (c *Core) refresh() {
 	s := State{
-		Connected: c.ctrl != nil, PeerFiles: c.peer.Files, FileSession: c.fileSession,
+		Connected: c.ctrl != nil, Paused: c.paused.Load(), PeerFiles: c.peer.Files, FileSession: c.fileSession,
 		Active:         c.active,
 		PeerName:       c.peer.Name,
 		PeerOS:         c.peer.OS,
@@ -201,6 +203,39 @@ func (c *Core) Hotkey(emergency bool) {
 
 // Toggle 供面板和托盘菜单调用。
 func (c *Core) Toggle() { c.try(c.toggle) }
+
+// SetPaused 手动断开（true）或恢复自动连接（false）。断开时如果键鼠在对端，
+// 会像连接中断一样把键鼠和显示器拿回本机。
+func (c *Core) SetPaused(p bool) {
+	done := make(chan struct{})
+	c.do(func() {
+		defer close(done)
+		if c.paused.Load() == p {
+			return
+		}
+		c.paused.Store(p)
+		if p {
+			log.Printf("已手动断开连接")
+			if c.ctrl != nil {
+				old := c.ctrl
+				c.quiet = true
+				c.detach()
+				old.Close()
+			}
+			if c.data != nil {
+				c.data.C.Close()
+			}
+		} else {
+			log.Printf("已恢复自动连接")
+			select {
+			case c.kick <- struct{}{}:
+			default:
+			}
+		}
+		c.refresh()
+	})
+	<-done
+}
 
 // PushInput 由输入线程在转发状态下调用；连续位移先合并；关键事件溢出时安排一次对端释放。
 func (c *Core) PushInput(ev InputEvent) {
@@ -718,6 +753,10 @@ func (c *Core) listen() error {
 				time.Sleep(200 * time.Millisecond)
 				continue
 			}
+			if c.paused.Load() {
+				conn.Close() // 手动断开期间不完成握手，对端拨号会直接失败
+				continue
+			}
 			go func() {
 				pc, err := proto.Server(conn, *c.keyp.Load())
 				if err != nil {
@@ -812,6 +851,10 @@ func (c *Core) dialLoop() {
 	last := ""
 	lastErr := ""
 	for {
+		if c.paused.Load() {
+			<-c.kick // 等用户点“重新连接”
+			continue
+		}
 		err := c.dialOnce(&last)
 		if err != nil && err.Error() != lastErr {
 			lastErr = err.Error()
@@ -881,6 +924,10 @@ func (c *Core) dialOnce(last *string) error {
 func (c *Core) runControl(pc *proto.Conn) {
 	stop := make(chan struct{})
 	c.do(func() {
+		if c.paused.Load() {
+			pc.Close() // 握手期间用户点了断开；下面的读循环会立即结束
+			return
+		}
 		if c.ctrl != nil {
 			old := c.ctrl
 			c.detach()
@@ -1071,11 +1118,15 @@ func (c *Core) detach() {
 	c.peer = proto.Info{}
 	c.ddc = nil
 	was := c.active
+	quiet := c.quiet
+	c.quiet = false
 	log.Printf("连接已断开")
 	c.setActive(ActiveNone)
 	if was == ActivePeer {
 		// 键鼠在本机而画面在对端：尽力把显示器拿回来
-		c.P.Notify("已切回本机", "与另一台设备的连接中断。")
+		if !quiet {
+			c.P.Notify("已切回本机", "与另一台设备的连接中断。")
+		}
 		if cfg := c.Config(); cfg.SwitchMonitor {
 			self, _ := c.inputs()
 			go func() {
@@ -1110,58 +1161,76 @@ func (c *Core) onPeerConfig(s Shared) {
 func (c *Core) pump(pc *proto.Conn, stop chan struct{}) {
 	ping := time.NewTicker(2 * time.Second)
 	defer ping.Stop()
-	buf := make([]byte, 13)
+	// 积压的事件合并成一次写入：高回报率鼠标在 Wi-Fi 上一帧一个包会加剧排队延迟。
+	const maxBatch = 64
+	frames := make([]proto.Frame, 0, maxBatch)
+	traces := make([]uint64, 0, maxBatch)
+	bufs := make([][13]byte, maxBatch)
 	for {
 		select {
 		case <-stop:
 			return
 		default:
 		}
-		ev, ok := c.input.pop()
-		if !ok {
-			select {
-			case <-stop:
-				return
-			case <-ping.C:
-				if pc.Write(proto.MsgPing, nil) != nil {
-					pc.Close()
-					return
+		frames, traces = frames[:0], traces[:0]
+		for len(frames) < maxBatch {
+			ev, ok := c.input.pop()
+			if !ok {
+				break
+			}
+			if out, ok := encodeInput(ev, bufs[len(frames)][:]); ok {
+				frames = append(frames, proto.Frame{Typ: ev.Typ, Payload: out})
+				if ev.trace != 0 {
+					traces = append(traces, ev.trace)
 				}
-			case <-c.input.wake:
+			}
+		}
+		if len(frames) > 0 {
+			if pc.WriteFrames(frames) != nil {
+				pc.Close()
+				return
+			}
+			for _, t := range traces {
+				c.media.mark(t, false)
 			}
 			continue
 		}
-		var out []byte
-		switch ev.Typ {
-		case proto.MsgKey:
-			binary.BigEndian.PutUint16(buf[0:], uint16(ev.A))
-			binary.BigEndian.PutUint16(buf[2:], uint16(ev.B))
-			buf[4] = ev.C
-			out = buf[:5]
-			if ev.trace != 0 {
-				binary.BigEndian.PutUint64(buf[5:], ev.trace)
-				out = buf[:13]
-			}
-		case proto.MsgInputReset:
-			out = nil
-		case proto.MsgMouseMove, proto.MsgWheel:
-			binary.BigEndian.PutUint32(buf[0:], uint32(ev.A))
-			binary.BigEndian.PutUint32(buf[4:], uint32(ev.B))
-			out = buf[:8]
-		case proto.MsgMouseButton:
-			buf[0], buf[1] = byte(ev.A), ev.C
-			out = buf[:2]
-		default:
-			continue
-		}
-		if pc.Write(ev.Typ, out) != nil {
-			pc.Close()
+		select {
+		case <-stop:
 			return
-		}
-		if ev.trace != 0 {
-			c.media.mark(ev.trace, false)
+		case <-ping.C:
+			if pc.Write(proto.MsgPing, nil) != nil {
+				pc.Close()
+				return
+			}
+		case <-c.input.wake:
 		}
 	}
+}
+
+// encodeInput 把一个键鼠事件编码成控制通道的负载，buf 至少 13 字节。
+func encodeInput(ev InputEvent, buf []byte) ([]byte, bool) {
+	switch ev.Typ {
+	case proto.MsgKey:
+		binary.BigEndian.PutUint16(buf[0:], uint16(ev.A))
+		binary.BigEndian.PutUint16(buf[2:], uint16(ev.B))
+		buf[4] = ev.C
+		if ev.trace != 0 {
+			binary.BigEndian.PutUint64(buf[5:], ev.trace)
+			return buf[:13], true
+		}
+		return buf[:5], true
+	case proto.MsgInputReset:
+		return nil, true
+	case proto.MsgMouseMove, proto.MsgWheel:
+		binary.BigEndian.PutUint32(buf[0:], uint32(ev.A))
+		binary.BigEndian.PutUint32(buf[4:], uint32(ev.B))
+		return buf[:8], true
+	case proto.MsgMouseButton:
+		buf[0], buf[1] = byte(ev.A), ev.C
+		return buf[:2], true
+	}
+	return nil, false
 }
 
 // runData 接管一条数据通道（剪贴板与文件），阻塞到连接断开。

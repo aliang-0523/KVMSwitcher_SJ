@@ -348,6 +348,7 @@ func main() {
 	serveControl()
 
 	uiToggle = c.Toggle
+	uiPause = func() { c.SetPaused(!c.State().Paused) }
 	uiQuit = p.cleanup
 	err = runApp(func() {
 		p.tap.start()

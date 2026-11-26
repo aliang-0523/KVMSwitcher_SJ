@@ -28,10 +28,13 @@ var (
 	mainQueue []func()
 
 	// 由 main 注入
-	useBrowser bool // 备用方式：不用内嵌窗口，改用默认浏览器显示面板
-	uiPanelURL func(tab string) string
-	uiToggle   func()
-	uiQuit     func()
+	useBrowser  bool // 备用方式：不用内嵌窗口，改用默认浏览器显示面板
+	uiPanelURL  func(tab string) string
+	uiToggle    func()
+	uiPause     func() // 在“断开连接”和“重新连接”之间切换
+	uiQuit      func()
+	miConn      objc.ID
+	napActivity objc.ID // 阻止 App Nap 的活动令牌，进程存活期间一直持有
 )
 
 func loadWebKit() error {
@@ -103,6 +106,8 @@ func buildStatusItem() {
 	menuItem(menu, "打开操作面板", "kvmOpenPanel:", "").Send(sel("setTarget:"), appTarget)
 	miToggle = menuItem(menu, "切换", "kvmToggle:", "")
 	miToggle.Send(sel("setTarget:"), appTarget)
+	miConn = menuItem(menu, "断开连接", "kvmPause:", "")
+	miConn.Send(sel("setTarget:"), appTarget)
 	menu.Send(sel("addItem:"), cls("NSMenuItem").Send(sel("separatorItem")))
 	menuItem(menu, "退出", "kvmQuit:", "").Send(sel("setTarget:"), appTarget)
 	statusItem.Send(sel("setMenu:"), menu)
@@ -119,6 +124,10 @@ func showState(s core.State) {
 			peer = "另一台设备"
 		}
 		title, status, toggle := "KVM ○", "另一台设备未连接", "切换到 "+peer
+		conn := "断开连接"
+		if s.Paused {
+			status, conn = "已手动断开连接", "重新连接"
+		}
 		if s.Connected {
 			status = "已连接 " + peer
 			if s.Active == core.ActivePeer {
@@ -132,6 +141,8 @@ func showState(s core.State) {
 			miStatus.Send(sel("setTitle:"), nsString(status))
 			miToggle.Send(sel("setTitle:"), nsString(toggle))
 			miToggle.Send(sel("setEnabled:"), s.Connected)
+			miConn.Send(sel("setTitle:"), nsString(conn))
+			miConn.Send(sel("setEnabled:"), s.Connected || s.Paused)
 		})
 	})
 }
@@ -196,6 +207,11 @@ func runApp(ready func()) error {
 				uiToggle()
 			}
 		}},
+		{Cmd: sel("kvmPause:"), Fn: func(self objc.ID, cmd objc.SEL, sender objc.ID) {
+			if uiPause != nil {
+				go uiPause() // 会等待核心事件循环，不能阻塞主线程
+			}
+		}},
 		{Cmd: sel("kvmQuit:"), Fn: func(self objc.ID, cmd objc.SEL, sender objc.ID) {
 			if uiQuit != nil {
 				uiQuit()
@@ -213,6 +229,12 @@ func runApp(ready func()) error {
 	}
 	nsApp = cls("NSApplication").Send(sel("sharedApplication"))
 	nsApp.Send(sel("setActivationPolicy:"), 1) // 辅助应用：不在程序坞显示图标
+	// 菜单栏应用通常没有可见窗口，会被 App Nap 降频、合并定时器，
+	// 收到的键鼠事件可能被推迟几到几十毫秒才注入。声明一个延迟敏感的长期活动来避免。
+	// NSActivityUserInitiated (0x00FFFFFF) | NSActivityLatencyCritical (0xFF00000000)；令牌需一直持有。
+	napActivity = cls("NSProcessInfo").Send(sel("processInfo")).Send(sel("beginActivityWithOptions:reason:"),
+		uint64(0x00FFFFFF|0xFF00000000), nsString("转发和注入键鼠输入"))
+	napActivity.Send(sel("retain"))
 	appTarget = objc.ID(c).Send(sel("alloc")).Send(sel("init"))
 	nsApp.Send(sel("setDelegate:"), appTarget)
 

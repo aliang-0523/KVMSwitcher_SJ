@@ -48,6 +48,7 @@ const (
 	idPanel     = 102
 	idAutostart = 103
 	idQuit      = 104
+	idConn      = 105
 )
 
 type notifyIconData struct {
@@ -289,6 +290,9 @@ func showMenu() {
 		pAppendMenuW.Call(menu, flags, id, uintptr(unsafe.Pointer(u16(text))))
 	}
 	status := "另一台设备未连接"
+	if st.Paused {
+		status = "已手动断开连接"
+	}
 	if st.Connected {
 		status = "已连接 " + peerLabel(st)
 	}
@@ -300,6 +304,12 @@ func showMenu() {
 		label = "切回本机"
 	}
 	add(mfString, idToggle, label+"\t"+theCore.Config().Hotkey)
+	switch {
+	case st.Paused:
+		add(mfString, idConn, "重新连接")
+	case st.Connected:
+		add(mfString, idConn, "断开连接")
+	}
 	add(mfSeparator, 0, "")
 	auto := uintptr(mfString)
 	if autostartEnabled() {
@@ -321,6 +331,8 @@ func showMenu() {
 		go openPanel("")
 	case idToggle:
 		theCore.Toggle()
+	case idConn:
+		go theCore.SetPaused(!st.Paused)
 	case idAutostart:
 		if err := setAutostart(!autostartEnabled()); err != nil {
 			go messageBox("设置开机自启失败：\n"+err.Error(), "KVMSwitch", mbOK|mbIconWarn)
