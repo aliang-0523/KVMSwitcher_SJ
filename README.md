@@ -17,6 +17,7 @@
 
 - **一键切换**：显示器通过 DDC/CI 指令换输入口，键鼠输入同时转到另一台设备。热键可自定义，另有紧急热键随时拿回控制。
 - **对等设计，没有主从**：键鼠插在哪台都可以，两台上是同一个操作面板，在任意一台改设置都会自动同步到另一台。
+- **单向控制（可选）**：开启的一端只控制另一台设备，不接收它的键鼠、不让它把键鼠拿走、不采用它改的设置；另一台只能把键鼠和显示器交回。
 - **剪贴板共享**：文本、图片、文件（含文件夹）。切换时在后台同步，就绪后正常粘贴即可；图片文件可以同时作为文件和图片粘贴。
 - **手动发文件**：在面板里拖入文件直接发到另一台，逐文件校验 SHA-256，有进度、取消和重试。
 - **键位映射**：PC 键盘的 `Ctrl` / `Alt` / `Win` 与 Mac 的 Control / Option / Command 对应关系可选，用 PC 键盘在 Mac 上也能按 `Ctrl+C` 复制。
@@ -173,6 +174,7 @@ Mac 端运行后在菜单栏显示 `KVM ○`（未连接）、`KVM ●`（键鼠
 - 程序只在局域网内工作：TCP 47812 用于通信，UDP 47813 用于局域网自动发现。不连接任何第三方服务器，唯一的外网请求是向 GitHub 检查更新。
 - 操作面板只监听本机回环地址，并要求每次启动随机生成的访问令牌。
 - 持有配对密钥就能控制另一台设备的键鼠，请像保管密码一样保管它，不要发给别人。
+- 默认情况下两台设备互相信任：一台被攻破，就能通过键鼠操作另一台。如果只需要一台控制另一台，请在发起控制、需要保护的那台（例如 Mac）开启“键盘与鼠标 › 控制方向 › 单向控制”。拦截在开启的这台设备上完成，不依赖对端配合。
 - 如果你发现了安全问题，请不要公开提交 Issue，可以通过 GitHub 的 [Private vulnerability reporting](https://github.com/aliang-0523/KVMSwitcher_SJ/security/advisories/new) 私下报告。
 
 ## 从源码构建
@@ -222,6 +224,7 @@ go run github.com/akavel/rsrc@v0.10.2 -arch amd64 -ico packaging/KVMSwitch.ico -
 
 完整的发布说明见 [Releases](https://github.com/aliang-0523/KVMSwitcher_SJ/releases)。
 
+- **1.3.17**：新增“单向控制”（面板“键盘与鼠标 › 控制方向”），默认关闭、只在本机生效。开启的一端只控制另一台设备：不接收它的键鼠、不让它把键鼠拿走、不采用它改的设置；另一台只能把键鼠和显示器交回。请两端一起更新。
 - **1.3.16**：新增主动断开连接（面板“运行状态”、Mac 菜单栏、Windows 托盘均可操作），断开后不再自动重连，直到点“重新连接”；降低键鼠延迟：Mac 端阻止 App Nap 降频，Windows 端关闭后台进程降速，积压的键鼠事件合并发送，接收端改为缓冲读取。请两端一起更新。
 - **1.3.15**：显示器接口支持“自定义编号”，用于不认标准输入口编号的显示器；Mac 端发送切换指令时自动补发，避免显示器偶尔丢指令导致切换失败。
 - **1.3.14**：安全修复：Mac 端切换命令（`mac_ddc_command`）改为只在本机生效，不再从对端同步；执行时不再经过 shell，第一个词须为程序绝对路径，并增加 5 秒超时。原来使用管道、引号等 shell 写法的，请改为脚本并填写脚本的绝对路径。
@@ -258,6 +261,7 @@ go run github.com/akavel/rsrc@v0.10.2 -arch amd64 -ico packaging/KVMSwitch.ico -
 - Press a hotkey (default `Ctrl+F12`). The monitor switches its input through DDC/CI, and keyboard and mouse input moves to the other machine.
 - The clipboard follows you: text, images and files.
 - Both machines are equal peers. Plug the keyboard and mouse into either one. Both run the same control panel, and settings sync automatically.
+- Optional one-way control: the machine that enables it only controls the other one. It ignores the other machine's keyboard, mouse and settings, and the other machine can only hand control and the monitor back.
 - All traffic stays on your LAN and is encrypted with AES-256-GCM, using a key derived from a shared pairing key.
 - Requirements: Windows 10/11 x64, an Apple-silicon Mac, and a monitor with DDC/CI enabled.
 - Download it from [Releases](https://github.com/aliang-0523/KVMSwitcher_SJ/releases/latest). Build it from source on Windows with `.\build.ps1`, which needs Go 1.26+ and rcodesign.
