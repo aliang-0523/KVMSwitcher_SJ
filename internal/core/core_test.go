@@ -971,3 +971,34 @@ func TestControlReleasedAfterMotionBurst(t *testing.T) {
 	r.win.PushInput(key)
 	r.wait("Ctrl released", func() bool { var held bool; r.fm.get(func() { held = r.fm.heldCtrl }); return !held })
 }
+
+// 本机正在控制对端时突然无法采集键鼠（例如权限被收回）：两端恢复各自独立，显示器切回本机。
+func TestLocalInputLostWhileControllingPeer(t *testing.T) {
+	r := newRig(t, true)
+	r.connected()
+	r.mac.Hotkey(false)
+	r.active(ActiveSelf, ActivePeer)
+	r.fm.get(func() { r.fm.monitor = nil })
+	r.mac.LocalInputLost()
+	r.active(ActiveNone, ActiveNone)
+	r.wait("Mac 停止转发、显示器切回 Mac、提示用户", func() bool {
+		var ok bool
+		r.fm.get(func() {
+			ok = !r.fm.forward && len(r.fm.monitor) == 1 && r.fm.monitor[0] == 0x0F && len(r.fm.notes) == 1
+		})
+		return ok
+	})
+	r.fw.get(func() {
+		if r.fw.controlled {
+			t.Fatal("Windows 不应继续处于被控制状态")
+		}
+	})
+	// 没有在控制对端时什么也不做
+	r.mac.LocalInputLost()
+	time.Sleep(200 * time.Millisecond)
+	r.fm.get(func() {
+		if len(r.fm.notes) != 1 {
+			t.Fatal("不应重复提示")
+		}
+	})
+}

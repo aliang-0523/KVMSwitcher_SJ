@@ -23,8 +23,10 @@ var (
 	cgEventGetIntegerValueField   func(ev uintptr, field uint32) int64
 	cgAssociateMouseAndCursor     func(connected int32) int32
 	cfMachPortCreateRunLoopSource func(alloc, port uintptr, order int) uintptr
+	cfMachPortInvalidate          func(port uintptr)
 	cfRunLoopGetMain              func() uintptr
 	cfRunLoopAddSource            func(rl, src, mode uintptr)
+	cfRunLoopRemoveSource         func(rl, src, mode uintptr)
 	cfRunLoopRun                  func()
 	cfRunLoopCommonModes          uintptr
 )
@@ -58,8 +60,10 @@ func loadTap() error {
 	purego.RegisterLibFunc(&cgEventGetIntegerValueField, cg, "CGEventGetIntegerValueField")
 	purego.RegisterLibFunc(&cgAssociateMouseAndCursor, cg, "CGAssociateMouseAndMouseCursorPosition")
 	purego.RegisterLibFunc(&cfMachPortCreateRunLoopSource, cf, "CFMachPortCreateRunLoopSource")
+	purego.RegisterLibFunc(&cfMachPortInvalidate, cf, "CFMachPortInvalidate")
 	purego.RegisterLibFunc(&cfRunLoopGetMain, cf, "CFRunLoopGetMain")
 	purego.RegisterLibFunc(&cfRunLoopAddSource, cf, "CFRunLoopAddSource")
+	purego.RegisterLibFunc(&cfRunLoopRemoveSource, cf, "CFRunLoopRemoveSource")
 	purego.RegisterLibFunc(&cfRunLoopRun, cf, "CFRunLoopRun")
 	addr, err := purego.Dlsym(cf, "kCFRunLoopCommonModes")
 	if err != nil || addr == 0 {
@@ -72,7 +76,9 @@ func loadTap() error {
 type tap struct {
 	c       *core.Core
 	inj     *injector
-	port    uintptr
+	cb      uintptr
+	port    atomic.Uintptr // 0 表示当前没有监听
+	src     atomic.Uintptr
 	forward atomic.Bool
 	mods    atomic.Pointer[modMap]
 
@@ -94,36 +100,76 @@ func (t *tap) tune(cfg *core.Config) {
 	t.mods.Store(&m)
 }
 
-// start 创建事件监听。没有键鼠控制权限时创建会失败，此时在后台重试直到用户授权。
+// start 创建事件监听，并在后台看守键鼠控制权限：没有权限时等用户授权后再创建，
+// 权限被收回时立刻撤掉监听。
 func (t *tap) start() {
-	cb := purego.NewCallback(t.callback)
+	t.cb = purego.NewCallback(t.callback)
+	if !t.create() {
+		log.Printf("暂时无法监听键鼠（需要键鼠控制权限），授权后会自动生效")
+	}
+	go t.guard()
+}
+
+func tapMask() uint64 {
 	var mask uint64
 	for _, typ := range []uint{evLeftDown, evLeftUp, evRightDown, evRightUp, evMoved, evLeftDragged, evRightDragged,
 		14, evKeyDown, evKeyUp, evFlagsChanged, evScrollWheel, evOtherDown, evOtherUp, evOtherDragged} {
 		mask |= 1 << typ
 	}
-	try := func() bool {
-		// kCGSessionEventTap(1), kCGHeadInsertEventTap(0), kCGEventTapOptionDefault(0)
-		port := cgEventTapCreate(1, 0, 0, mask, cb, 0)
-		if port == 0 {
-			return false
-		}
-		t.port = port
-		src := cfMachPortCreateRunLoopSource(0, port, 0)
-		cfRunLoopAddSource(cfRunLoopGetMain(), src, cfRunLoopCommonModes)
-		cgEventTapEnable(port, true)
-		log.Printf("键鼠监听已就绪")
-		return true
+	return mask
+}
+
+func (t *tap) create() bool {
+	// kCGSessionEventTap(1), kCGHeadInsertEventTap(0), kCGEventTapOptionDefault(0)
+	port := cgEventTapCreate(1, 0, 0, tapMask(), t.cb, 0)
+	if port == 0 {
+		return false
 	}
-	if try() {
+	src := cfMachPortCreateRunLoopSource(0, port, 0)
+	cfRunLoopAddSource(cfRunLoopGetMain(), src, cfRunLoopCommonModes)
+	t.src.Store(src)
+	t.port.Store(port)
+	cgEventTapEnable(port, true)
+	log.Printf("键鼠监听已就绪")
+	return true
+}
+
+// guard 每半秒检查一次键鼠控制权限。
+//
+// 这个监听是“主动”的：本机所有键鼠事件都要等它处理完才继续传递。程序运行中权限被收回时，
+// macOS 不会自动撤掉它，整个系统的键鼠输入都会卡住，只能强制重启。所以必须由我们自己立刻撤掉。
+func (t *tap) guard() {
+	for range time.Tick(500 * time.Millisecond) {
+		trusted := axIsProcessTrusted()
+		switch {
+		case t.port.Load() != 0 && !trusted:
+			t.teardown()
+		case t.port.Load() == 0 && trusted:
+			t.create()
+		}
+	}
+}
+
+// teardown 停用并撤掉监听，恢复本机光标，并让核心停止控制对端。
+// 在看守 goroutine 里执行，不依赖主线程是否空闲；端口和事件源故意不释放，
+// 以免主线程上正在执行的回调用到已释放的对象（每次收回权限只泄漏两个很小的对象）。
+func (t *tap) teardown() {
+	port := t.port.Swap(0)
+	if port == 0 {
 		return
 	}
-	log.Printf("暂时无法监听键鼠（需要键鼠控制权限），授权后会自动生效")
-	go func() {
-		for !try() {
-			time.Sleep(2 * time.Second)
-		}
-	}()
+	cgEventTapEnable(port, false)
+	if src := t.src.Swap(0); src != 0 {
+		cfRunLoopRemoveSource(cfRunLoopGetMain(), src, cfRunLoopCommonModes)
+	}
+	cfMachPortInvalidate(port)
+	if t.forward.Swap(false) {
+		cgAssociateMouseAndCursor(1)
+	}
+	reset := func() { t.swallowed, t.heldMods = map[uint16]bool{}, map[uint16]uint16{} }
+	onMain(reset) // 这两个表只在主线程访问
+	log.Printf("键鼠控制权限被收回：已立即停止键鼠监听，避免系统键鼠输入卡住；重新授权后会自动恢复")
+	t.c.LocalInputLost()
 }
 
 // setForward 开始或停止把本机物理输入转发给另一台设备。
@@ -153,8 +199,10 @@ func (t *tap) push(ev core.InputEvent) { t.c.PushInput(ev) }
 // callback 返回事件本身表示放行，返回 0 表示吞掉。
 func (t *tap) callback(proxy uintptr, typ uint32, ev uintptr, info uintptr) uintptr {
 	if typ == evTapDisabledByTimeout || typ == evTapDisabledByUserInput {
-		if t.port != 0 {
-			cgEventTapEnable(t.port, true) // 系统在回调过慢时会停用监听，这里重新启用
+		// 系统在回调过慢等情况下会停用监听。只在权限仍在时重新启用：权限已被收回时
+		// 重新启用会让整个系统的键鼠继续卡住，交给 guard 撤掉。
+		if port := t.port.Load(); port != 0 && axIsProcessTrusted() {
+			cgEventTapEnable(port, true)
 		}
 		return ev
 	}

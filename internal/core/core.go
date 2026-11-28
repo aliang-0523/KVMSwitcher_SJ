@@ -379,6 +379,31 @@ func (c *Core) toggle() {
 	}
 }
 
+// LocalInputLost 由平台在本机突然无法采集键鼠时调用（例如运行中键鼠控制权限被收回）。
+// 本机不能再控制对端：两台设备恢复各自独立，并尽力把显示器切回本机。可在任意 goroutine 调用。
+func (c *Core) LocalInputLost() {
+	c.do(func() {
+		if c.active != ActivePeer {
+			return
+		}
+		if c.ctrl != nil {
+			c.seq++
+			c.ctrl.WriteJSON(proto.MsgActive, proto.Active{Who: "none", Seq: c.seq})
+		}
+		c.ddc = nil
+		c.setActive(ActiveNone)
+		if cfg := c.Config(); cfg.SwitchMonitor {
+			self, _ := c.inputs()
+			go func() {
+				if err := c.P.SetMonitorInput(self, cfg); err != nil {
+					log.Printf("切回显示器未成功: %v", err)
+				}
+			}()
+		}
+		c.P.Notify("已停止控制另一台设备", "本机的键鼠控制权限被收回。重新授权后即可继续使用。")
+	})
+}
+
 // takeHere 是紧急热键：无论当前状态如何，把键鼠和显示器都拿回按下热键的这台设备。
 func (c *Core) takeHere() {
 	if c.ctrl == nil {
