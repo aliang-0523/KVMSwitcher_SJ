@@ -111,7 +111,32 @@ func (r release) pick(current, platform string) (pkg, int, error) {
 type State struct {
 	Latest, Message  string
 	Busy, Ready, New bool
+	Done, Total      int64 // 下载进度（字节），Total 为 0 表示没有在下载
 }
+
+// stage 更新面板上显示的安装阶段与下载进度。
+func (m *Manager) stage(msg string, done, total int64) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if msg != "" {
+		m.s.Message = msg
+	}
+	m.s.Done, m.s.Total = done, total
+}
+
+// progress 在写入安装包的同时汇报已下载的字节数。
+type progress struct {
+	m     *Manager
+	n     int64
+	total int64
+}
+
+func (p *progress) Write(b []byte) (int, error) {
+	p.n += int64(len(b))
+	p.m.stage("", min(p.n, p.total), p.total)
+	return len(b), nil
+}
+
 type Manager struct {
 	mu                sync.Mutex
 	s                 State
@@ -206,7 +231,7 @@ func (m *Manager) Install(tag string) bool {
 	}
 	p := m.pkg
 	m.s.Busy = true
-	m.s.Message = "正在下载并校验安装包…"
+	m.s.Message = "正在下载发布签名…"
 	m.mu.Unlock()
 	go func() {
 		e := m.downloadInstall(tag, p)
@@ -214,6 +239,7 @@ func (m *Manager) Install(tag string) bool {
 			m.mu.Lock()
 			m.s.Busy = false
 			m.s.Message = "安装失败：" + e.Error()
+			m.s.Done, m.s.Total = 0, 0
 			m.mu.Unlock()
 			return
 		}
@@ -277,6 +303,7 @@ func (m *Manager) download(tag string, p pkg) (path string, err error) {
 			os.RemoveAll(dir)
 		}
 	}()
+	m.stage("正在下载安装包…", 0, p.Size)
 	res, err = m.get(p.URL)
 	if err != nil {
 		return "", err
@@ -287,15 +314,17 @@ func (m *Manager) download(tag string, p pkg) (path string, err error) {
 	if err != nil {
 		return "", err
 	}
-	sum, err := verifiedCopy(f, res.Body, p.Asset)
+	sum, err := verifiedCopy(io.MultiWriter(f, &progress{m: m, total: p.Size}), res.Body, p.Asset)
 	if ce := f.Close(); err == nil {
 		err = ce
 	}
 	if err != nil {
 		return "", err
 	}
+	m.stage("正在校验发布签名…", p.Size, p.Size)
 	if err = VerifySignature(tag, p.Name, p.Size, sum, sig); err != nil {
 		return "", fmt.Errorf("%v，已拒绝安装：安装包可能不是官方发布的", err)
 	}
+	m.stage("校验通过，即将退出并安装…", p.Size, p.Size)
 	return path, nil
 }

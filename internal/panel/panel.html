@@ -165,7 +165,7 @@
       <h1>系统与日志</h1>
       <p class="sub">程序在后台常驻，关闭这个窗口不会退出。</p>
       <div class="card">
-        <div class="row"><div class="lbl"><b>软件更新</b><span id="updateStatus" role="status">准备检查…</span></div><div class="ctl"><button class="btn" id="checkUpdate">检查更新</button><button class="btn" id="installUpdate" hidden>安装更新</button></div></div>
+        <div class="row"><div class="lbl"><b>软件更新</b><span id="updateStatus" role="status">准备检查…</span></div><progress id="updateBar" max="1" value="0" hidden></progress><div class="ctl"><button class="btn" id="checkUpdate">检查更新</button><button class="btn" id="installUpdate" hidden>安装更新</button></div></div>
         <div id="updateConfirm" hidden><p id="updateWarning"></p><button class="btn" id="updateYes">确认安装并退出</button> <button class="btn" id="updateNo">取消</button></div>
         <div class="row"><div class="lbl"><b>开机自动启动</b><span>登录后在后台启动，不弹出面板（这一项每台设备单独设置）</span></div><div class="ctl"><label class="sw"><input type="checkbox" id="autostart"><span></span></label></div></div>
         <div class="row"><div class="lbl"><b>配置文件</b><span>所有设置都保存在这个文件里</span></div><div class="ctl"><button class="btn" data-open="config">打开</button></div></div>
@@ -412,7 +412,11 @@ function renderPorts() {
 
 function render(s) {
   const u = s.update || {};
-  $('#updateStatus').textContent = '当前 '+s.version+' · '+(u.Message || '准备检查…');
+  const mb = n => (n / 1048576).toFixed(1);
+  const downloading = !!u.Busy && u.Total > 0;
+  $('#updateStatus').textContent = '当前 '+s.version+' · '+(u.Message || '准备检查…')+(downloading && u.Done < u.Total ? ' '+mb(u.Done)+' / '+mb(u.Total)+' MB' : '');
+  $('#updateBar').hidden = !downloading;
+  $('#updateBar').value = downloading ? u.Done / u.Total : 0;
   $('#checkUpdate').disabled = !!u.Busy;
   $('#installUpdate').hidden = !u.Ready;
   $('#installUpdate').disabled = !!u.Busy;
@@ -540,7 +544,7 @@ let confirmedTag='';
 $('#installUpdate').onclick=()=>{
   const u=state?.update;if(!u?.Ready || u.Busy)return;
   confirmedTag=u.Latest;
-  $('#updateWarning').textContent='安装 '+confirmedTag+' 将退出程序并中断键鼠和传输。请先把键鼠切回本机并保存工作。'+(state.self_os==='windows'?'Windows 将打开 MSI 安装向导，安装成功后自动启动；取消或安装失败不会启动。':'Mac 将替换当前应用并重新打开。');
+  $('#updateWarning').textContent='安装 '+confirmedTag+' 将退出程序并中断键鼠和传输。请先把键鼠切回本机并保存工作。'+(state.self_os==='windows'?'程序退出后，Windows 会显示安装进度并自动完成安装，然后重新打开 KVMSwitch；取消或安装失败时会重新打开当前版本。':'Mac 将替换当前应用并重新打开。');
   $('#updateConfirm').hidden=false;
 };
 $('#updateNo').onclick=()=>{$('#updateConfirm').hidden=true;confirmedTag=''};

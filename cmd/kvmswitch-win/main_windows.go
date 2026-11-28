@@ -15,6 +15,7 @@ import (
 
 	"kvmswitch/internal/core"
 	"kvmswitch/internal/panel"
+	"kvmswitch/internal/update"
 	"kvmswitch/internal/xfer"
 )
 
@@ -114,6 +115,10 @@ func fatal(msg string) {
 }
 
 func main() {
+	// 应用内更新的安装辅助进程：必须在单实例检查等一切初始化之前处理。
+	if update.RunInstallHelper(os.Args) {
+		return
+	}
 	if len(os.Args) == 2 && os.Args[1] == "--panel-window" {
 		os.Exit(runPanelWindow())
 	}

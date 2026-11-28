@@ -71,19 +71,41 @@ func run(bin, out, version string) error {
 	if err := os.WriteFile(filepath.Join(contents, "Info.plist"), []byte(strings.ReplaceAll(infoPlist, "VERSION", version)), 0644); err != nil {
 		return err
 	}
+	// 发布版必须每次用同一张证书签名：macOS 按签名身份记住“辅助功能”等授权，
+	// 临时签名（ad-hoc）的身份是程序哈希，每次更新都会变，用户只能重新授权。
 	if runtime.GOOS == "darwin" {
-		if err := command("/usr/bin/codesign", "--force", "--sign", "-", app); err != nil {
+		identity := os.Getenv("KVMSWITCH_CODESIGN_IDENTITY") // 钥匙串里的证书名，如 "KVMSwitch Code Signing"
+		if identity == "" {
+			identity = "-"
+			fmt.Fprintln(os.Stderr, "提示：未设置 KVMSWITCH_CODESIGN_IDENTITY，使用临时签名；装上这个包后需要重新授予键鼠权限")
+		}
+		if err := command("/usr/bin/codesign", "--force", "--sign", identity, app); err != nil {
 			return err
 		}
 		if err := command("/usr/bin/codesign", "--verify", "--deep", "--strict", app); err != nil {
 			return err
+		}
+		if identity != "-" {
+			req, err := exec.Command("/usr/bin/codesign", "-d", "-r-", app).CombinedOutput()
+			if err != nil || !strings.Contains(string(req), "certificate leaf") {
+				return fmt.Errorf("签名身份不是固定证书，更新后授权会失效：%s", req)
+			}
 		}
 	} else {
 		signer := os.Getenv("RCODESIGN")
 		if signer == "" {
 			signer = "rcodesign"
 		}
-		if err := command(signer, "sign", app); err != nil {
+		args := []string{"sign"}
+		if p12 := os.Getenv("KVMSWITCH_CODESIGN_P12"); p12 != "" {
+			args = append(args, "--p12-file", p12)
+			if pw := os.Getenv("KVMSWITCH_CODESIGN_P12_PASSWORD_FILE"); pw != "" {
+				args = append(args, "--p12-password-file", pw)
+			}
+		} else {
+			fmt.Fprintln(os.Stderr, "提示：未设置 KVMSWITCH_CODESIGN_P12，使用临时签名；装上这个包后需要重新授予键鼠权限")
+		}
+		if err := command(signer, append(args, app)...); err != nil {
 			return fmt.Errorf("需要 rcodesign 对完整 Mac 应用签名（可设置 RCODESIGN 路径）: %w", err)
 		}
 	}

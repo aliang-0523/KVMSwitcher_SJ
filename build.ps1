@@ -3,7 +3,7 @@ param([switch]$Installer, [switch]$Sign)  # -Sign：发版时用发布私钥给�
 $ErrorActionPreference = 'Stop'
 Set-Location $PSScriptRoot
 New-Item -ItemType Directory -Force dist | Out-Null
-$version = '1.3.18'
+$version = '1.3.19'
 
 go build -tags nodynamic -trimpath -ldflags "-H=windowsgui -s -w" -o dist\kvmswitch.exe ./cmd/kvmswitch-win
 if ($LASTEXITCODE -ne 0) { throw "Windows 端编译失败" }

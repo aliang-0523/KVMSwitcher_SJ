@@ -151,6 +151,9 @@ func TestDownloadRequiresSignature(t *testing.T) {
 	if b, _ := os.ReadFile(path); !bytes.Equal(b, body) {
 		t.Fatal("下载内容不符")
 	}
+	if s := m.State(); s.Done != int64(len(body)) || s.Total != int64(len(body)) {
+		t.Fatalf("下载进度没有走完：%+v", s)
+	}
 	os.RemoveAll(filepath.Dir(path))
 
 	for what, s := range map[string][]byte{"伪造的签名": forged, "空签名": []byte("\n"), "超大签名": bytes.Repeat([]byte("A"), maxSig+1)} {

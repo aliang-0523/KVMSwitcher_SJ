@@ -2,10 +2,12 @@
 <Wix xmlns="http://schemas.microsoft.com/wix/2006/wi">
 <Product Name="KVMSwitch" Id="*" Manufacturer="KVMSwitch" Language="1033" Version="$(var.Version)" UpgradeCode="B7CF82E2-CA97-429C-8EDB-4C25DC4273DD">
  <Package InstallerVersion="500" Compressed="yes" InstallScope="perUser"/>
- <MajorUpgrade DowngradeErrorMessage="A newer version is already installed."/>
- <!-- The MSI owns relaunch so upgrades from older updaters also work. The
-      post-ExecuteAction step runs in the interactive client after success.
-      Cancellation or failure skips subsequent steps; no launch for uninstall or silent/basic UI. -->
+ <MajorUpgrade AllowSameVersionUpgrades="yes" DowngradeErrorMessage="A newer version is already installed."/>
+ <!-- Relaunch for manual installs and for updaters up to 1.3.18 (full UI). Since 1.3.19 the
+      in-app updater waits for the app to exit, installs with /passive (basic UI, so this
+      action does not run) and relaunches the app itself. The post-ExecuteAction step runs in
+      the interactive client after success. Cancellation or failure skips subsequent steps;
+      no launch for uninstall or silent/basic UI. -->
  <CustomAction Id="OpenInstalledKVM" FileKey="KVMExe" ExeCommand="--restart" Execute="immediate" Return="asyncNoWait"/>
  <InstallUISequence>
   <Custom Action="OpenInstalledKVM" After="ExecuteAction">UILevel &gt;= 4 AND NOT (REMOVE~="ALL") AND NOT UPGRADINGPRODUCTCODE AND NOT (ACTION="ADMIN")</Custom>
