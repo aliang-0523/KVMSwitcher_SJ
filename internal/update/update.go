@@ -1,4 +1,5 @@
-// Package update installs only hashed assets from this repository's latest stable release.
+// Package update installs only assets from this repository's latest stable release
+// that match their published SHA-256 and carry a valid release signature (see sign.go).
 package update
 
 import (
@@ -62,30 +63,49 @@ type release struct {
 	Assets            []Asset
 }
 
-func (r release) pick(current, platform string) (Asset, int, error) {
+// pkg 是一个平台的安装包及其签名文件。
+type pkg struct {
+	Asset
+	Sig Asset
+}
+
+func (r release) pick(current, platform string) (pkg, int, error) {
 	n, e := compare(r.Tag, current)
 	if e != nil {
-		return Asset{}, 0, e
+		return pkg{}, 0, e
 	}
 	if !strings.HasPrefix(r.Tag, "v") || r.Draft || r.Prerelease {
-		return Asset{}, 0, errors.New("不是正式发布版本")
+		return pkg{}, 0, errors.New("不是正式发布版本")
 	}
 	if n < 0 {
-		return Asset{}, n, nil
+		return pkg{}, n, nil
 	}
 	name := map[string]string{"windows": "KVMSwitch-Setup.msi", "mac": "KVMSwitch-mac.zip"}[platform]
+	base := "https://github.com/" + repo + "/releases/download/" + r.Tag + "/"
+	var p pkg
+	var found, signed bool
 	for _, a := range r.Assets {
-		if a.Name != name {
-			continue
+		switch a.Name {
+		case name:
+			hash, e := hex.DecodeString(strings.TrimPrefix(a.Digest, "sha256:"))
+			if a.State != "uploaded" || a.URL != base+name || a.Size <= 0 || a.Size > maxPackage || !strings.HasPrefix(a.Digest, "sha256:") || e != nil || len(hash) != sha256.Size {
+				return pkg{}, 0, errors.New("安装包的地址、大小或 SHA-256 元数据无效")
+			}
+			p.Asset, found = a, true
+		case name + SigSuffix:
+			if a.State != "uploaded" || a.URL != base+name+SigSuffix || a.Size <= 0 || a.Size > maxSig {
+				return pkg{}, 0, errors.New("发布签名文件的地址或大小无效")
+			}
+			p.Sig, signed = a, true
 		}
-		want := "https://github.com/" + repo + "/releases/download/" + r.Tag + "/" + name
-		hash, e := hex.DecodeString(strings.TrimPrefix(a.Digest, "sha256:"))
-		if a.State != "uploaded" || a.URL != want || a.Size <= 0 || a.Size > maxPackage || !strings.HasPrefix(a.Digest, "sha256:") || e != nil || len(hash) != sha256.Size {
-			return Asset{}, 0, errors.New("安装包的地址、大小或 SHA-256 元数据无效")
-		}
-		return a, n, nil
 	}
-	return Asset{}, 0, errors.New("该版本尚未发布本机安装包")
+	if !found {
+		return pkg{}, 0, errors.New("该版本尚未发布本机安装包")
+	}
+	if !signed {
+		return pkg{}, 0, errors.New("该版本没有发布签名，已拒绝更新")
+	}
+	return p, n, nil
 }
 
 type State struct {
@@ -95,7 +115,7 @@ type State struct {
 type Manager struct {
 	mu                sync.Mutex
 	s                 State
-	asset             Asset
+	pkg               pkg
 	current, platform string
 	quit              func()
 	client            *http.Client
@@ -128,10 +148,10 @@ func (m *Manager) Check() bool {
 	m.mu.Unlock()
 	go func() {
 		r, e := m.latest()
-		var a Asset
+		var p pkg
 		var n int
 		if e == nil {
-			a, n, e = r.pick(m.current, m.platform)
+			p, n, e = r.pick(m.current, m.platform)
 		}
 		m.mu.Lock()
 		defer m.mu.Unlock()
@@ -145,7 +165,7 @@ func (m *Manager) Check() bool {
 		} else if n < 0 {
 			msg = "本机版本高于最新发布版，不会降级"
 		}
-		m.asset = a
+		m.pkg = p
 		m.s = State{Latest: r.Tag, Message: msg, Ready: n >= 0, New: n > 0}
 	}()
 	return true
@@ -164,16 +184,19 @@ func (m *Manager) latest() (r release, err error) {
 	e = json.NewDecoder(io.LimitReader(res.Body, 2<<20)).Decode(&r)
 	return r, e
 }
-func verifiedCopy(w io.Writer, r io.Reader, a Asset) error {
+
+// verifiedCopy 复制安装包并核对大小和 SHA-256，返回实际算出的 SHA-256。
+func verifiedCopy(w io.Writer, r io.Reader, a Asset) ([]byte, error) {
 	h := sha256.New()
 	n, e := io.Copy(io.MultiWriter(w, h), io.LimitReader(r, a.Size+1))
 	if e != nil {
-		return e
+		return nil, e
 	}
-	if n != a.Size || "sha256:"+hex.EncodeToString(h.Sum(nil)) != a.Digest {
-		return errors.New("安装包大小或 SHA-256 不匹配，已停止安装")
+	sum := h.Sum(nil)
+	if n != a.Size || "sha256:"+hex.EncodeToString(sum) != a.Digest {
+		return nil, errors.New("安装包大小或 SHA-256 不匹配，已停止安装")
 	}
-	return nil
+	return sum, nil
 }
 func (m *Manager) Install(tag string) bool {
 	m.mu.Lock()
@@ -181,12 +204,12 @@ func (m *Manager) Install(tag string) bool {
 		m.mu.Unlock()
 		return false
 	}
-	a := m.asset
+	p := m.pkg
 	m.s.Busy = true
 	m.s.Message = "正在下载并校验安装包…"
 	m.mu.Unlock()
 	go func() {
-		e := m.downloadInstall(a)
+		e := m.downloadInstall(tag, p)
 		if e != nil {
 			m.mu.Lock()
 			m.s.Busy = false
@@ -198,40 +221,81 @@ func (m *Manager) Install(tag string) bool {
 	}()
 	return true
 }
-func (m *Manager) downloadInstall(a Asset) (err error) {
-	dir, err := os.MkdirTemp("", "kvmswitch-update-")
+func (m *Manager) downloadInstall(tag string, p pkg) error {
+	path, err := m.download(tag, p)
 	if err != nil {
 		return err
+	}
+	if err := launch(path); err != nil {
+		os.RemoveAll(filepath.Dir(path))
+		return err
+	}
+	return nil
+}
+
+func (m *Manager) get(u string) (*http.Response, error) {
+	res, e := m.client.Get(u)
+	if e != nil {
+		var ue *url.Error
+		if errors.As(e, &ue) {
+			return nil, ue.Err
+		}
+		return nil, e
+	}
+	if res.StatusCode != 200 {
+		res.Body.Close()
+		return nil, fmt.Errorf("下载失败：%s", res.Status)
+	}
+	return res, nil
+}
+
+// download 下载签名和安装包，核对 SHA-256 并校验发布签名，全部通过才返回安装包路径。
+func (m *Manager) download(tag string, p pkg) (path string, err error) {
+	res, err := m.get(p.Sig.URL)
+	if err != nil {
+		return "", err
+	}
+	b, err := io.ReadAll(io.LimitReader(res.Body, maxSig+1))
+	res.Body.Close()
+	if err != nil {
+		return "", err
+	}
+	if len(b) > maxSig {
+		return "", errors.New("发布签名文件过大")
+	}
+	sig, err := DecodeSignature(b)
+	if err != nil {
+		return "", err
+	}
+
+	dir, err := os.MkdirTemp("", "kvmswitch-update-")
+	if err != nil {
+		return "", err
 	}
 	defer func() {
 		if err != nil {
 			os.RemoveAll(dir)
 		}
 	}()
-	res, e := m.client.Get(a.URL)
-	if e != nil {
-		var ue *url.Error
-		if errors.As(e, &ue) {
-			return ue.Err
-		}
-		return e
+	res, err = m.get(p.URL)
+	if err != nil {
+		return "", err
 	}
 	defer res.Body.Close()
-	if res.StatusCode != 200 {
-		return fmt.Errorf("下载失败：%s", res.Status)
+	path = filepath.Join(dir, p.Name)
+	f, err := os.OpenFile(path, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0600)
+	if err != nil {
+		return "", err
 	}
-	p := filepath.Join(dir, a.Name)
-	f, e := os.OpenFile(p, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0600)
-	if e != nil {
-		return e
+	sum, err := verifiedCopy(f, res.Body, p.Asset)
+	if ce := f.Close(); err == nil {
+		err = ce
 	}
-	e = verifiedCopy(f, res.Body, a)
-	ce := f.Close()
-	if e != nil {
-		return e
+	if err != nil {
+		return "", err
 	}
-	if ce != nil {
-		return ce
+	if err = VerifySignature(tag, p.Name, p.Size, sum, sig); err != nil {
+		return "", fmt.Errorf("%v，已拒绝安装：安装包可能不是官方发布的", err)
 	}
-	return launch(p)
+	return path, nil
 }

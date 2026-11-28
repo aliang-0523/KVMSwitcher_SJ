@@ -1,5 +1,5 @@
 # 编译两端程序到 dist 目录（需要 Go 和 rcodesign，Mac 端在 Windows 上交叉编译并打包成 .app）
-param([switch]$Installer)
+param([switch]$Installer, [switch]$Sign)  # -Sign：发版时用发布私钥给安装包生成 .sig（见 tools/sign）
 $ErrorActionPreference = 'Stop'
 Set-Location $PSScriptRoot
 New-Item -ItemType Directory -Force dist | Out-Null
@@ -21,4 +21,10 @@ if ($LASTEXITCODE -ne 0) { throw "Mac 应用打包失败" }
 Remove-Item dist\kvmswitch-mac
 
 if ($Installer) { & "$PSScriptRoot/packaging/build-msi.ps1" -Version $version }
+if ($Sign) {
+    $pkgs = @('dist\KVMSwitch-mac.zip')
+    if ($Installer) { $pkgs += 'dist\KVMSwitch-Setup.msi' }
+    go run ./tools/sign sign "v$version" @pkgs
+    if ($LASTEXITCODE -ne 0) { throw "安装包签名失败" }
+}
 Get-ChildItem dist | Select-Object Name, Length
